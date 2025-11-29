@@ -69,6 +69,7 @@ class Uart8250(Uart):
     cxx_header = "dev/serial/uart8250.hh"
     cxx_class = "gem5::Uart8250"
     pio_size = Param.Addr(0x8, "Size of address range")
+    interrupt_id = Param.Int(-1, "Interrupt ID to use (if -1, use platform default)")
 
 
 class RiscvUart8250(Uart8250):
@@ -78,7 +79,8 @@ class RiscvUart8250(Uart8250):
         )
         platform = self.platform.unproxy(self)
         plic = platform.plic
-        node.append(FdtPropertyWords("interrupts", [platform.uart_int_id]))
+        int_id = self.interrupt_id if self.interrupt_id != -1 else platform.uart_int_id
+        node.append(FdtPropertyWords("interrupts", [int_id]))
         node.append(FdtPropertyWords("clock-frequency", [0x384000]))
         node.append(FdtPropertyWords("interrupt-parent", state.phandle(plic)))
         node.appendCompatible(["ns8250", "ns16550a"])

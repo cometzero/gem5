@@ -51,7 +51,10 @@ Uart8250::processIntrEvent(int intrBit)
 {
     if (intrBit & registers.ier.get()) {
        DPRINTF(Uart, "UART InterEvent, interrupting\n");
-       platform->postConsoleInt();
+       if (interruptId != -1)
+           platform->postPciInt(interruptId);
+       else
+           platform->postConsoleInt();
        status |= intrBit;
        lastTxInt = curTick();
     } else {
@@ -94,12 +97,15 @@ Uart8250::clearIntr(int intrBit)
 
     // Clear interrupt at the controller if neither TX nor RX is pending now
     if (!status) {
-        platform->clearConsoleInt();
+        if (interruptId != -1)
+            platform->clearPciInt(interruptId);
+        else
+            platform->clearConsoleInt();
     }
 }
 
 Uart8250::Uart8250(const Params &p)
-    : Uart(p, p.pio_size), registers(this, name() + ".registers"),
+    : Uart(p, p.pio_size), interruptId(p.interrupt_id), registers(this, name() + ".registers"),
       lastTxInt(0),
       txIntrEvent([this]{ processIntrEvent(TX_INT); }, "TX"),
       rxIntrEvent([this]{ processIntrEvent(RX_INT); }, "RX")
@@ -138,7 +144,7 @@ Uart8250::Registers::Registers(Uart8250 *uart, const std::string &new_name) :
 
     msr.readonly();
 
-    addRegisters({rbrThrDll, ierDlh, iirFcr, lcr, mcr, lsr, msr, sr});
+    addRegisters({rbrThrDll, ierDlh, iirFcr, lcr, mcr, lsr, msr, sr, padding, dummy_3c});
 }
 
 uint8_t
@@ -266,7 +272,10 @@ Uart8250::dataAvailable()
 {
     // If the kernel wants an interrupt when we have data.
     if (registers.ier.get().rdi) {
-        platform->postConsoleInt();
+        if (interruptId != -1)
+            platform->postPciInt(interruptId);
+        else
+            platform->postConsoleInt();
         status |= RX_INT;
     }
 }

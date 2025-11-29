@@ -91,6 +91,8 @@ class Uart8250 : public Uart
         Line = 3,  // Rx Line Status (highest priority).
     };
 
+    const int interruptId; // Added for custom interrupt routing
+
     class Registers : public RegisterBankLE
     {
       public:
@@ -199,6 +201,12 @@ class Uart8250 : public Uart
 
         // The scratch register didn't exist on the 8250.
         RegisterRaz sr = {"sr", 1};
+
+        // Padding to reach offset 0x3c (60). SR ends at 8. 60 - 8 = 52.
+        RegisterRaz padding = {"padding", 52};
+
+        // Dummy register at offset 0x3c (60) to prevent panic with Zephyr ns16550 driver
+        RegisterRaz dummy_3c = {"dummy_3c", 4};
     };
     using Register8 = Registers::Register8;
     template <class T>
