@@ -358,6 +358,9 @@ class ArmSystem(System):
     release = Param.ArmRelease(ArmDefaultRelease(), "Arm Release")
 
     multi_proc = Param.Bool(True, "Multiprocessor system?")
+    cpu_affinities = VectorParam.UInt64(
+        [], "Optional MPIDR affinities indexed by context ID"
+    )
     gic_cpu_addr = Param.Addr(0, "Addres of the GIC CPU interface")
     reset_addr = Param.Addr(0x0, "Reset address (ARMv8)")
     auto_reset_addr = Param.Bool(

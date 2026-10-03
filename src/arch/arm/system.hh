@@ -154,6 +154,9 @@ class ArmSystem : public System
     /** true if this a multiprocessor system */
     bool multiProc;
 
+    /** Optional explicit MPIDR affinities, indexed by context ID. */
+    const std::vector<uint64_t> cpuAffinities;
+
     const ArmRelease* releaseFS() const { return release; }
 
     bool has(ArmExtension ext) const { return release->has(ext); }

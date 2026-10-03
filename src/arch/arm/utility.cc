@@ -196,7 +196,9 @@ getMPIDR(ArmSystem *arm_sys, ThreadContext *tc)
         replaceBits(mpidr, 24, 1);
 
     // Get Affinity numbers
-    mpidr |= getAffinity(arm_sys, tc);
+    const Affinity affinity = getAffinity(arm_sys, tc);
+    mpidr |= uint64_t(affinity) & 0x00ffffff;
+    mpidr |= uint64_t(affinity.aff3) << 32;
     return mpidr;
 }
 
@@ -221,6 +223,16 @@ getAff0(ArmSystem *arm_sys, ThreadContext *tc)
 Affinity
 getAffinity(ArmSystem *arm_sys, ThreadContext *tc)
 {
+    if (!arm_sys->cpuAffinities.empty()) {
+        const auto id = tc->contextId();
+        fatal_if(id < 0 || size_t(id) >= arm_sys->cpuAffinities.size(),
+                 "Missing explicit CPU affinity for context %u", id);
+        const auto mpidr = arm_sys->cpuAffinities[id];
+        Affinity affinity = mpidr & 0x00ffffff;
+        affinity.aff3 = bits(mpidr, 39, 32);
+        return affinity;
+    }
+
     Affinity aff = 0;
     aff.aff0 = getAff0(arm_sys, tc);
     aff.aff1 = getAff1(arm_sys, tc);

@@ -41,6 +41,7 @@
 #include "arch/arm/system.hh"
 
 #include <iostream>
+#include <set>
 
 #include "arch/arm/fs_workload.hh"
 #include "arch/arm/semihosting.hh"
@@ -82,8 +83,17 @@ ArmSystem::ArmSystem(const Params &p)
       _smeVL(p.sme_vl),
       semihosting(p.semihosting),
       release(p.release),
-      multiProc(p.multi_proc)
+      multiProc(p.multi_proc),
+      cpuAffinities(p.cpu_affinities)
 {
+    std::set<uint64_t> affinities;
+    for (auto affinity : cpuAffinities) {
+        fatal_if(affinity & ~0xff00ffffffULL,
+                 "CPU affinity contains reserved MPIDR bits");
+        fatal_if(!affinities.insert(affinity).second,
+                 "Duplicate explicit CPU affinity %#x", affinity);
+    }
+
     if (p.auto_reset_addr) {
         _resetAddr = workload->getEntry();
     } else {
