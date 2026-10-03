@@ -108,6 +108,11 @@ SimObject(
     sim_objects=['MmioVirtIO'],
     tags=['arm isa']
 )
+SimObject(
+    'TimingVirtIOBlock.py',
+    sim_objects=['TimingVirtIOBlock'],
+    tags=['arm isa']
+)
 if env['CONF']['USE_ARM_FASTMODEL']:
     SimObject(
         'VExpressFastmodel.py',
@@ -155,6 +160,7 @@ Source('rtc_pl031.cc', tags=['arm isa'])
 Source('timer_cpulocal.cc', tags=['arm isa'])
 Source('vgic.cc', tags=['arm isa'])
 Source('vio_mmio.cc', tags=['arm isa'])
+Source('timing_virtio_block.cc', tags=['arm isa'])
 Source('ufs_device.cc', tags=['arm isa'])
 Source('energy_ctrl.cc', tags=['arm isa'])
 Source('fvp_base_pwr_ctrl.cc', tags=['arm isa'])
