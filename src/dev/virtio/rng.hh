@@ -78,6 +78,8 @@ class VirtIORng : public VirtIODeviceBase
                  VirtIORng &_parent);
         virtual ~RngQueue() {}
 
+        void serialize(CheckpointOut &cp) const override;
+        void unserialize(CheckpointIn &cp) override;
         void onNotify() { trySend(); }
 
         /** Try to send data pending data from the terminal. */

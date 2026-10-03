@@ -90,7 +90,7 @@ VirtIOBlock::read(const BlkRequest &req, VirtDescriptor *desc_chain,
         ++sector;
     }
 
-    desc_chain->chainWrite(off_data, &data[0], size);
+    desc_chain->chainWrite(off_data, data.data(), size);
 
     return S_OK;
 }
@@ -108,8 +108,7 @@ VirtIOBlock::write(const BlkRequest &req, VirtDescriptor *desc_chain,
     if (size % SectorSize != 0)
         panic("Unexpected request/sector size relationship\n");
 
-
-    desc_chain->chainRead(off_data, &data[0], size);
+    desc_chain->chainRead(off_data, data.data(), size);
 
     for (Addr offset = 0; offset < size; offset += SectorSize) {
         if (image.write(&data[offset], sector) != SectorSize) {
@@ -164,7 +163,9 @@ VirtIOBlock::RequestQueue::onNotifyDescriptor(VirtDescriptor *desc)
                      &status, sizeof(status));
 
     // Tell the guest that we are done with this descriptor.
-    produceDescriptor(desc, sizeof(BlkRequest) + data_size + sizeof(Status));
+    const uint32_t written =
+        sizeof(Status) + (req.type == T_IN && status == S_OK ? data_size : 0);
+    produceDescriptor(desc, written);
     parent.kick();
 }
 

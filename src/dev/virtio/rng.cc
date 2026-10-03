@@ -38,6 +38,8 @@
 
 #include "dev/virtio/rng.hh"
 
+#include <sstream>
+
 #include "debug/VIORng.hh"
 #include "params/VirtIORng.hh"
 #include "sim/system.hh"
@@ -70,15 +72,38 @@ VirtIORng::readConfig(PacketPtr pkt, Addr cfgOffset)
 }
 
 void
+VirtIORng::RngQueue::serialize(CheckpointOut &cp) const
+{
+    VirtQueue::serialize(cp);
+    std::ostringstream state;
+    state << rng->gen;
+    paramOut(cp, "rngState", state.str());
+}
+
+void
+VirtIORng::RngQueue::unserialize(CheckpointIn &cp)
+{
+    VirtQueue::unserialize(cp);
+    std::string state;
+    // Old checkpoints have no engine state: keep the seeded stream and emit
+    // optParamIn's warning. Exact continuation requires the new field.
+    if (optParamIn(cp, "rngState", state)) {
+        std::istringstream input(state);
+        fatal_if(!(input >> rng->gen), "Invalid VirtIORng checkpoint state");
+    }
+}
+
+void
 VirtIORng::RngQueue::trySend()
 {
     DPRINTF(VIORng, "try send\n");
 
     VirtDescriptor *d;
     while ((d = consumeDescriptor())) {
-        DPRINTF(VIORng, "Got descriptor (len: %i)\n", d->size());
+        const size_t size = d->chainSize();
+        DPRINTF(VIORng, "Got descriptor chain (len: %i)\n", size);
         size_t len = 0;
-        while (len < d->size()) {
+        while (len < size) {
             uint8_t byte = rng->random<uint8_t>();
             d->chainWrite(len, &byte, sizeof(uint8_t));
             ++len;

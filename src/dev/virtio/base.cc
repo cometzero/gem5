@@ -79,8 +79,9 @@ VirtDescriptor::update()
 {
     const Addr vq_addr(queue->getAddress());
     // Check if the queue has been initialized yet
-    if (vq_addr == 0)
+    if (!queue->isReady()) {
         return;
+    }
 
     assert(_index < queue->getSize());
     const Addr desc_addr(vq_addr + sizeof(desc) * _index);
@@ -97,8 +98,12 @@ void
 VirtDescriptor::updateChain()
 {
     VirtDescriptor *desc(this);
+    unsigned count = 0;
     do {
+        panic_if(++count > queue->getSize(), "Loop in descriptor chain!");
         desc->update();
+        panic_if(desc->desc.flags & VRING_DESC_F_INDIRECT,
+                 "Indirect descriptors were not negotiated");
     } while ((desc = desc->next()) != NULL && desc != this);
 
     if (desc == this)
@@ -149,7 +154,7 @@ VirtDescriptor::read(size_t offset, uint8_t *dst, size_t size) const
 {
     DPRINTF(VIO, "VirtDescriptor(%p, 0x%x, %i)::read: offset: %i, dst: 0x%x, size: %i\n",
             this, desc.addr, desc.len, offset, (long)dst, size);
-    assert(size <= desc.len - offset);
+    assert(offset <= desc.len && size <= desc.len - offset);
     if (!isIncoming())
         panic("Trying to read from outgoing buffer\n");
 
@@ -161,7 +166,7 @@ VirtDescriptor::write(size_t offset, const uint8_t *src, size_t size)
 {
     DPRINTF(VIO, "VirtDescriptor(%p, 0x%x, %i)::write: offset: %i, src: 0x%x, size: %i\n",
             this, desc.addr, desc.len, offset, (long)src, size);
-    assert(size <= desc.len - offset);
+    assert(offset <= desc.len && size <= desc.len - offset);
     if (!isOutgoing())
         panic("Trying to write to incoming buffer\n");
 
@@ -226,13 +231,19 @@ VirtDescriptor::chainSize() const
     return size;
 }
 
-
-
 VirtQueue::VirtQueue(PortProxy &proxy, ByteOrder bo, uint16_t size)
-    : byteOrder(bo), _size(size), _address(0), memProxy(proxy),
-      avail(proxy, bo, size), used(proxy, bo, size),
+    : byteOrder(bo),
+      _maxSize(size),
+      _size(size),
+      _ready(false),
+      _address(0),
+      memProxy(proxy),
+      avail(proxy, bo, size),
+      used(proxy, bo, size),
       _last_avail(0)
 {
+    fatal_if(!size || (size & (size - 1)),
+             "Virtqueue size must be a nonzero power of two");
     descriptors.reserve(_size);
     for (int i = 0; i < _size; ++i)
         descriptors.emplace_back(proxy, bo, *this, i);
@@ -243,6 +254,10 @@ VirtQueue::serialize(CheckpointOut &cp) const
 {
     SERIALIZE_SCALAR(_address);
     SERIALIZE_SCALAR(_last_avail);
+    SERIALIZE_SCALAR(_size);
+    SERIALIZE_SCALAR(_ready);
+    paramOut(cp, "availableAddress", avail.getAddress());
+    paramOut(cp, "usedAddress", used.getAddress());
 }
 
 void
@@ -256,6 +271,15 @@ VirtQueue::unserialize(CheckpointIn &cp)
     // Use the address setter to ensure that the ring buffer addresses
     // are updated as well.
     setAddress(addr_in);
+    uint16_t size_in = _maxSize;
+    optParamIn(cp, "_size", size_in);
+    fatal_if(!setSize(size_in), "Invalid checkpoint virtqueue size");
+    Addr available = avail.getAddress();
+    Addr used_addr = used.getAddress();
+    optParamIn(cp, "availableAddress", available);
+    optParamIn(cp, "usedAddress", used_addr);
+    setAddresses(addr_in, available, used_addr);
+    optParamIn(cp, "_ready", _ready);
 }
 
 void
@@ -263,6 +287,10 @@ VirtQueue::reset()
 {
     _address = 0;
     _last_avail = 0;
+    _ready = false;
+    _size = _maxSize;
+    avail.ring.resize(_size);
+    used.ring.resize(_size);
 
     avail.reset();
     used.reset();
@@ -279,22 +307,59 @@ VirtQueue::setAddress(Addr address)
     _address = address;
     avail.setAddress(addr_avail);
     used.setAddress(addr_used);
+    _ready = address != 0;
+}
+
+void
+VirtQueue::setAddresses(Addr desc, Addr available, Addr used_addr)
+{
+    _address = desc;
+    avail.setAddress(available);
+    used.setAddress(used_addr);
+}
+
+bool
+VirtQueue::setSize(uint32_t size)
+{
+    if (!size || size > _maxSize || (size & (size - 1))) {
+        return false;
+    }
+    _size = size;
+    avail.ring.resize(size);
+    used.ring.resize(size);
+    return true;
+}
+
+bool
+VirtQueue::setReady(bool ready)
+{
+    if (ready && ((_address & 15) || (avail.getAddress() & 1) ||
+                  (used.getAddress() & 3))) {
+        return false;
+    }
+    _ready = ready;
+    return true;
 }
 
 VirtDescriptor *
 VirtQueue::consumeDescriptor()
 {
+    if (!_ready) {
+        return nullptr;
+    }
     avail.read();
     DPRINTF(VIO, "consumeDescriptor: _last_avail: %i, avail.idx: %i (->%i)\n",
             _last_avail, avail.header.index,
             avail.ring[_last_avail % used.ring.size()]);
     if (_last_avail == avail.header.index)
         return NULL;
+    panic_if(uint16_t(avail.header.index - _last_avail) > _size,
+             "Virtqueue available ring overrun");
 
     VirtDescriptor::Index index(avail.ring[_last_avail % used.ring.size()]);
     ++_last_avail;
 
-    VirtDescriptor *d(&descriptors[index]);
+    VirtDescriptor *d(getDescriptor(index));
     d->updateChain();
 
     return d;
@@ -307,11 +372,12 @@ VirtQueue::produceDescriptor(VirtDescriptor *desc, uint32_t len)
     DPRINTF(VIO, "produceDescriptor: dscIdx: %i, len: %i, used.idx: %i\n",
             desc->index(), len, used.header.index);
 
-    struct vring_used_elem &e(used.ring[used.header.index % used.ring.size()]);
+    const size_t index = used.header.index % used.ring.size();
+    struct vring_used_elem &e(used.ring[index]);
     e.id = desc->index();
     e.len = len;
     used.header.index += 1;
-    used.write();
+    used.writeElement(index);
 }
 
 void
@@ -386,6 +452,11 @@ void
 VirtIODeviceBase::onNotify(QueueID idx)
 {
     DPRINTF(VIO, "onNotify: idx: %i\n", idx);
+    if (_modern && (!_deviceStatus.driver_ok || !_deviceStatus.features_ok ||
+                    _deviceStatus.failed || idx >= _queues.size() ||
+                    !_queues[idx]->isReady())) {
+        return;
+    }
     if (idx >= _queues.size()) {
         panic("Guest tried to notify queue (%i), but only %i "
               "queues registered.\n",
@@ -398,7 +469,7 @@ void
 VirtIODeviceBase::setGuestFeatures(FeatureBits features)
 {
     DPRINTF(VIO, "Setting guest features: 0x%x\n", features);
-    if (~deviceFeatures & features) {
+    if (!_modern && (~deviceFeatures & features)) {
         panic("Guest tried to enable unsupported features:\n"
               "Device features: 0x%x\n"
               "Requested features: 0x%x\n",
@@ -407,15 +478,32 @@ VirtIODeviceBase::setGuestFeatures(FeatureBits features)
     guestFeatures = features;
 }
 
+void
+VirtIODeviceBase::enableModern()
+{
+    fatal_if(byteOrder != ByteOrder::little,
+             "Modern VirtIO requires little-endian device byte order");
+    _modern = true;
+}
 
 void
 VirtIODeviceBase::setDeviceStatus(DeviceStatus status)
 {
+    const bool reset_requested = status == 0;
+    if (_modern && status.features_ok &&
+        ((guestFeatures & ~getDeviceFeatures()) ||
+         !(guestFeatures & F_VERSION_1))) {
+        status.features_ok = 0;
+    }
+    if (_modern && !status.features_ok) {
+        status.driver_ok = 0;
+    }
     _deviceStatus = status;
     DPRINTF(VIO, "ACK: %i, DRIVER: %i, DRIVER_OK: %i, FAILED: %i\n",
             status.acknowledge, status.driver, status.driver_ok, status.failed);
-    if (status == 0)
+    if (reset_requested) {
         reset();
+    }
 }
 
 void
@@ -483,7 +571,7 @@ uint32_t
 VirtIODeviceBase::getQueueAddress() const
 {
     Addr address(getCurrentQueue().getAddress());
-    assert(!(address & ((1 >> VirtQueue::ALIGN_BITS) - 1)));
+    assert(!(address & (VirtQueue::ALIGN_SIZE - 1)));
     return address >> VirtQueue::ALIGN_BITS;
 }
 
