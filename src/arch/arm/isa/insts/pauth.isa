@@ -45,9 +45,9 @@ let {{
     def pacEnabledCode(hint):
         if hint:
             code = """
-                if (!HaveExt(xc->tcBase(), ArmExtension::FEAT_PAuth)) {
-                    return NoFault;
-                }
+                // A disabled hint still writes back the original destination
+                // so a renamed register receives its preserved value.
+                if (HaveExt(xc->tcBase(), ArmExtension::FEAT_PAuth))
                 """
         else:
             code = """
@@ -62,10 +62,11 @@ let {{
         global header_output, decoder_output, exec_output
         pac_code = '''
             %(enabled)s
-
-            uint64_t res;
-            fault = %(op)s(xc->tcBase(), %(op1)s, %(op2)s, &res);
-            XDest = res;
+            {
+                uint64_t res;
+                fault = %(op)s(xc->tcBase(), %(op1)s, %(op2)s, &res);
+                XDest = res;
+            }
             '''
         if templateBase=='DataX2Reg':
             code = pac_code % {"enabled": pacEnabledCode(hint),
@@ -89,9 +90,11 @@ let {{
         templateBase = "XPauthOpRegReg"
 
         code = pacEnabledCode(hint) + """
-            uint64_t res;
-            stripPAC(xc->tcBase(), XDest, data, &res);
-            XDest = res;
+            {
+                uint64_t res;
+                stripPAC(xc->tcBase(), XDest, data, &res);
+                XDest = res;
+            }
             """
         regoptype = 'RegOp'
 
