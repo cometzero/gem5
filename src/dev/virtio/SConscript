@@ -42,6 +42,7 @@ SimObject('VirtIO.py', sim_objects=[
 SimObject('VirtIOConsole.py', sim_objects=['VirtIOConsole'])
 SimObject('VirtIOBlock.py', sim_objects=['VirtIOBlock'])
 SimObject('VirtIORng.py', sim_objects=['VirtIORng'])
+SimObject('VirtIONet.py', sim_objects=['VirtIONet'])
 SimObject('VirtIO9P.py', sim_objects=[
     'VirtIO9PBase', 'VirtIO9PProxy', 'VirtIO9PDiod', 'VirtIO9PSocket'])
 
@@ -51,6 +52,7 @@ Source('console.cc')
 Source('block.cc')
 Source('fs9p.cc')
 Source('rng.cc')
+Source('net.cc')
 
 GTest('virtqueue.test', 'base.test.cc', 'base.cc',
       '../../cpu/reg_class.cc',
@@ -62,6 +64,7 @@ GTest('virtqueue.test', 'base.test.cc', 'base.cc',
 
 DebugFlag('VIO', 'VirtIO base functionality')
 DebugFlag('VIORng', 'VirtIO entropy source device ')
+DebugFlag('VIONet', 'VirtIO network device')
 DebugFlag('VIOIface', 'VirtIO transport')
 DebugFlag('VIOConsole', 'VirtIO console device')
 DebugFlag('VIOBlock', 'VirtIO block device')
