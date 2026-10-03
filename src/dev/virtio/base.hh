@@ -44,6 +44,7 @@
 
 #include "base/bitunion.hh"
 #include "base/compiler.hh"
+#include "base/logging.hh"
 #include "base/types.hh"
 #include "dev/virtio/virtio_ring.h"
 #include "mem/port_proxy.hh"
@@ -63,12 +64,8 @@ class VirtQueue;
  *
  * VirtIO prior to version 1.0 (legacy versions) normally send values
  * to the host in the guest systems native byte order. This is going
- * to change in version 1.0 which mandates little endian. We currently
- * only support the legacy version of VirtIO (the new and shiny
- * standard is still in a draft state and not implemented by the
- * kernel). Once we support the new standard, we should negotiate the
- * VirtIO version with the guest and automatically use the right type
- * of byte swapping.
+ * to change in version 1.0 which mandates little endian. Modern
+ * transports require a little-endian device configuration.
  */
 
 template <typename T>
@@ -334,6 +331,31 @@ class VirtQueue : public Serializable
      */
     Addr getAddress() const { return _address; }
 
+    /** Separate split-ring addresses used by modern transports. */
+    void setAddresses(Addr desc, Addr available, Addr used);
+    Addr
+    getAvailableAddress() const
+    {
+        return avail.getAddress();
+    }
+    Addr
+    getUsedAddress() const
+    {
+        return used.getAddress();
+    }
+    uint16_t
+    getMaxSize() const
+    {
+        return _maxSize;
+    }
+    bool setSize(uint32_t size);
+    bool setReady(bool ready);
+    bool
+    isReady() const
+    {
+        return _ready;
+    }
+
     /**
      * Get the number of descriptors available in this queue.
      *
@@ -351,6 +373,7 @@ class VirtQueue : public Serializable
      * @return Pointer to a VirtDescriptor.
      */
     VirtDescriptor *getDescriptor(VirtDescriptor::Index index) {
+        panic_if(index >= _size, "Virtqueue descriptor index out of bounds");
         return &descriptors[index];
     }
     /** @} */
@@ -376,9 +399,8 @@ class VirtQueue : public Serializable
      * @note The desc parameter must refer to the first descriptor in
      * a chain that has been retrieved using consumeDescriptor().
      *
-     * @note The len parameter specified the amount of data produced
-     * by the device model. It seems to be ignored by Linux and it is
-     * not well defined.
+     * @note The len parameter is the number of bytes written by the
+     * device into the device-writable buffers of the chain.
      *
      * @param desc Start of descriptor chain.
      * @param len Length of the produced data.
@@ -450,7 +472,9 @@ class VirtQueue : public Serializable
     VirtQueue();
 
     /** Queue size in terms of number of descriptors */
-    const uint16_t _size;
+    const uint16_t _maxSize;
+    uint16_t _size;
+    bool _ready;
     /** Base address of the queue */
     Addr _address;
     /** Guest physical memory proxy */
@@ -495,12 +519,16 @@ class VirtQueue : public Serializable
          * @param addr New host physical address
          */
         void setAddress(Addr addr) { _base = addr; }
+        Addr
+        getAddress() const
+        {
+            return _base;
+        }
 
         /** Update the ring buffer header with data from the guest. */
         void
         readHeader()
         {
-            assert(_base != 0);
             _proxy.readBlob(_base, &header, sizeof(header));
             header.flags = gtoh(header.flags, byteOrder);
             header.index = gtoh(header.index, byteOrder);
@@ -510,7 +538,6 @@ class VirtQueue : public Serializable
         writeHeader()
         {
             Header out;
-            assert(_base != 0);
             out.flags = htog(header.flags, byteOrder);
             out.index = htog(header.index, byteOrder);
             _proxy.writeBlob(_base, &out, sizeof(out));
@@ -532,7 +559,6 @@ class VirtQueue : public Serializable
         void
         write()
         {
-            assert(_base != 0);
             /* Create a byte-swapped copy of the ring and write it to
              * guest memory. */
             auto temp = std::make_unique<T[]>(ring.size());
@@ -540,6 +566,15 @@ class VirtQueue : public Serializable
                 temp[i] = htog(ring[i], byteOrder);
             _proxy.writeBlob(_base + sizeof(header),
                              temp.get(), sizeof(T) * ring.size());
+            writeHeader();
+        }
+
+        void
+        writeElement(size_t index)
+        {
+            const T out = htog(ring[index], byteOrder);
+            _proxy.writeBlob(_base + sizeof(header) + sizeof(T) * index, &out,
+                             sizeof(out));
             writeHeader();
         }
 
@@ -587,8 +622,9 @@ class VirtQueue : public Serializable
 class VirtIODeviceBase : public SimObject
 {
   public:
-    typedef uint16_t QueueID;
-    typedef uint32_t FeatureBits;
+    typedef uint32_t QueueID;
+    typedef uint64_t FeatureBits;
+    static constexpr FeatureBits F_VERSION_1 = 1ULL << 32;
     /** This is a VirtQueue address as exposed through the low-level
      * interface.\ The address needs to be multiplied by the page size
      * (seems to be hardcoded to 4096 in the spec) to get the real
@@ -600,6 +636,8 @@ class VirtIODeviceBase : public SimObject
 
     BitUnion8(DeviceStatus)
         Bitfield<7> failed;
+        Bitfield<6> needs_reset;
+        Bitfield<3> features_ok;
         Bitfield<2> driver_ok;
         Bitfield<1> driver;
         Bitfield<0> acknowledge;
@@ -799,6 +837,28 @@ class VirtIODeviceBase : public SimObject
      */
     QueueID getQueueSelect() const { return _queueSelect; }
 
+    VirtQueue *
+    getQueue(QueueID idx)
+    {
+        return idx < _queues.size() ? _queues[idx] : nullptr;
+    }
+    const VirtQueue *
+    getQueue(QueueID idx) const
+    {
+        return idx < _queues.size() ? _queues[idx] : nullptr;
+    }
+    void enableModern();
+    bool
+    isModern() const
+    {
+        return _modern;
+    }
+    FeatureBits
+    getDeviceFeatures() const
+    {
+        return deviceFeatures | (_modern ? F_VERSION_1 : 0);
+    }
+
     /**
      * Change the host physical address of the currently active queue.
      *
@@ -892,6 +952,8 @@ class VirtIODeviceBase : public SimObject
      * @see setDeviceStatus
      */
     DeviceStatus _deviceStatus;
+
+    bool _modern = false;
 
     /** Queue select register (set by guest) */
     QueueID _queueSelect;

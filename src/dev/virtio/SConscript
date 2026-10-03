@@ -52,6 +52,14 @@ Source('block.cc')
 Source('fs9p.cc')
 Source('rng.cc')
 
+GTest('virtqueue.test', 'base.test.cc', 'base.cc',
+      '../../cpu/reg_class.cc',
+      '../../mem/port_proxy.cc', '../../mem/packet.cc', '../../mem/port.cc',
+      '../../mem/protocol/atomic.cc', '../../mem/protocol/functional.cc',
+      '../../mem/protocol/timing.cc', '../../sim/port.cc',
+      '../../sim/bufval.cc',
+      with_tag('gem5 simobject'))
+
 DebugFlag('VIO', 'VirtIO base functionality')
 DebugFlag('VIORng', 'VirtIO entropy source device ')
 DebugFlag('VIOIface', 'VirtIO transport')

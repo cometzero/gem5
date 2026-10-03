@@ -52,6 +52,7 @@ class MmioVirtIO(BasicPioDevice):
     cxx_class = "gem5::MmioVirtIO"
 
     pio_size = Param.Addr(4096, "IO range")
+    modern = Param.Bool(False, "Use the VirtIO MMIO version 2 transport")
     interrupt = Param.ArmInterruptPin("Interrupt to use for this device")
 
     vio = Param.VirtIODeviceBase(VirtIODummyDevice(), "VirtIO device")

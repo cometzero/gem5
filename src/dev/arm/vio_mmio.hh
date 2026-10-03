@@ -52,6 +52,9 @@ class MmioVirtIO : public BasicPioDevice
   public:
     MmioVirtIO(const MmioVirtIOParams &params);
     virtual ~MmioVirtIO();
+    void serialize(CheckpointOut &cp) const override;
+    void unserialize(CheckpointIn &cp) override;
+    void startup() override;
 
   protected: // BasicPioDevice
     Tick read(PacketPtr pkt) override;
@@ -77,10 +80,18 @@ class MmioVirtIO : public BasicPioDevice
         OFF_QUEUE_NUM = 0x38,
         OFF_QUEUE_ALIGN = 0x3C,
         OFF_QUEUE_PFN = 0x40,
+        OFF_QUEUE_READY = 0x44,
         OFF_QUEUE_NOTIFY = 0x50,
         OFF_INTERRUPT_STATUS = 0x60,
         OFF_INTERRUPT_ACK = 0x64,
         OFF_STATUS = 0x70,
+        OFF_QUEUE_DESC_LOW = 0x80,
+        OFF_QUEUE_DESC_HIGH = 0x84,
+        OFF_QUEUE_AVAIL_LOW = 0x90,
+        OFF_QUEUE_AVAIL_HIGH = 0x94,
+        OFF_QUEUE_USED_LOW = 0xA0,
+        OFF_QUEUE_USED_HIGH = 0xA4,
+        OFF_CONFIG_GENERATION = 0xFC,
         OFF_CONFIG = 0x100,
     };
 
@@ -111,6 +122,7 @@ class MmioVirtIO : public BasicPioDevice
   protected: // Params
     VirtIODeviceBase &vio;
     ArmInterruptPin *const interrupt;
+    const bool modern;
 };
 
 } // namespace gem5
