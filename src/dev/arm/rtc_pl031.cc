@@ -60,6 +60,17 @@ PL031::PL031(const Params &p)
     timeVal = mkutctime(&local_time);
 }
 
+void
+PL031::resetForWarmBoot()
+{
+    if (matchEvent.scheduled()) {
+        deschedule(matchEvent);
+    }
+    interrupt->clear();
+    matchVal = 0;
+    rawInt = maskInt = pendingInt = false;
+    // The RTC time base survives a software warm reset.
+}
 
 Tick
 PL031::read(PacketPtr pkt)
@@ -133,13 +144,14 @@ PL031::write(PacketPtr pkt)
       case ControlReg:
         break; // Can't stop when started
       case IntMask:
-        maskInt = pkt->getLE<uint32_t>();
-        break;
+          maskInt = pkt->getLE<uint32_t>() & 1;
+          updateInterrupt();
+          break;
       case IntClear:
-        if (pkt->getLE<uint32_t>()) {
-            rawInt = false;
-            pendingInt = false;
-        }
+          if (pkt->getLE<uint32_t>() & 1) {
+              rawInt = false;
+              updateInterrupt();
+          }
         break;
       default:
         if (readId(pkt, ambaId, pioAddr))
@@ -155,32 +167,49 @@ PL031::write(PacketPtr pkt)
 void
 PL031::resyncMatch()
 {
-    DPRINTF(Timer, "Setting up new match event match=%d time=%d\n", matchVal,
-            timeVal);
-
-    uint32_t seconds_until = matchVal - timeVal;
-    Tick ticks_until = sim_clock::as_int::s * seconds_until;
-
     if (matchEvent.scheduled()) {
-        DPRINTF(Timer, "-- Event was already schedule, de-scheduling\n");
         deschedule(matchEvent);
     }
-    schedule(matchEvent, curTick() + ticks_until);
-    DPRINTF(Timer, "-- Scheduling new event for: %d\n", curTick() + ticks_until);
+
+    const Tick now = curTick();
+    const Tick elapsed = now - lastWrittenTick;
+    const uint32_t current = timeVal + elapsed / sim_clock::as_int::s;
+    // Unsigned subtraction implements the 32-bit RTC counter wraparound.
+    const uint32_t seconds_until = matchVal - current;
+    if (!seconds_until) {
+        counterMatch();
+        return;
+    }
+
+    // Match on the RTC second boundary, not a whole second after this write.
+    const Tick fraction = elapsed % sim_clock::as_int::s;
+    // A far-future 32-bit RTC match can exceed gem5's tick range. It cannot
+    // fire in this simulation; avoid overflowing into an earlier alarm.
+    if (seconds_until > (MaxTick - now + fraction) / sim_clock::as_int::s) {
+        return;
+    }
+    const Tick delay = sim_clock::as_int::s * seconds_until - fraction;
+    schedule(matchEvent, now + delay);
+    DPRINTF(Timer, "Scheduling RTC match at tick %llu\n", now + delay);
+}
+
+void
+PL031::updateInterrupt()
+{
+    pendingInt = maskInt && rawInt;
+    if (pendingInt) {
+        interrupt->raise();
+    } else {
+        interrupt->clear();
+    }
 }
 
 void
 PL031::counterMatch()
 {
-    DPRINTF(Timer, "Counter reached zero\n");
-
+    DPRINTF(Timer, "RTC counter matched\n");
     rawInt = true;
-    bool old_pending = pendingInt;
-    pendingInt = maskInt & rawInt;
-    if (pendingInt && !old_pending) {
-        DPRINTF(Timer, "-- Causing interrupt\n");
-        interrupt->raise();
-    }
+    updateInterrupt();
 }
 
 void

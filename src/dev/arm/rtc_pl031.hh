@@ -101,6 +101,9 @@ class PL031 : public AmbaIntDevice
      */
     void resyncMatch();
 
+    /** Drive RTCINTR from the raw status and bit-zero interrupt mask. */
+    void updateInterrupt();
+
   public:
     using Params = PL031Params;
 
@@ -108,6 +111,8 @@ class PL031 : public AmbaIntDevice
       * The constructor for RealView just registers itself with the MMU.
       * @param p params structure
       */
+    void resetForWarmBoot();
+
     PL031(const Params &p);
 
     /**
