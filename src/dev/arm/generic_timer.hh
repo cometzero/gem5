@@ -230,6 +230,7 @@ class ArchTimer : public SystemCounterListener, public Drainable,
     uint64_t compareValue() const { return _counterLimit; }
     /// Sets the CompareValue view of the timer.
     void setCompareValue(uint64_t val);
+    void resetForWarmBoot();
 
     /// Returns the TimerValue view of the timer.
     uint32_t timerValue() const { return _counterLimit - value(); }
@@ -290,6 +291,7 @@ class GenericTimer : public SimObject
     PARAMS(GenericTimer);
 
     GenericTimer(const Params &p);
+    void resetForWarmBoot();
 
     void serialize(CheckpointOut &cp) const override;
     void unserialize(CheckpointIn &cp) override;

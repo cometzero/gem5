@@ -134,6 +134,24 @@ Gicv3Distributor::Gicv3Distributor(Gicv3 * gic, uint32_t it_lines)
 }
 
 void
+Gicv3Distributor::resetForWarmBoot()
+{
+    ARE = true;
+    DS = !gic->getSystem()->has(ArmExtension::SECURITY);
+    EnableGrp1S = EnableGrp1NS = EnableGrp0 = false;
+    std::fill(irqGroup.begin(), irqGroup.end(), 0);
+    std::fill(irqEnabled.begin(), irqEnabled.end(), false);
+    std::fill(irqPending.begin(), irqPending.end(), false);
+    std::fill(irqPendingIspendr.begin(), irqPendingIspendr.end(), false);
+    std::fill(irqActive.begin(), irqActive.end(), false);
+    std::fill(irqGrpmod.begin(), irqGrpmod.end(), 0);
+    std::fill(irqNsacr.begin(), irqNsacr.end(), 0);
+    std::fill(irqPriority.begin(), irqPriority.end(), 0xaa);
+    std::fill(irqConfig.begin(), irqConfig.end(), Gicv3::INT_LEVEL_SENSITIVE);
+    std::fill(irqAffinityRouting.begin(), irqAffinityRouting.end(), 0);
+}
+
+void
 Gicv3Distributor::init()
 {
 }

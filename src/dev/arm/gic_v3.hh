@@ -116,6 +116,9 @@ class Gicv3 : public BaseGic, public Gicv3Registers
     static const int INTID_NONSECURE = 1021;
     static const int INTID_SPURIOUS = 1023;
 
+    /** Reset GIC state after the platform has quiesced all IRQ sources. */
+    void resetForWarmBoot();
+
     // Number of Software Generated Interrupts
     static const int SGI_MAX = 16;
     // Number of Private Peripheral Interrupts

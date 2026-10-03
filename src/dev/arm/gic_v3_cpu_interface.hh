@@ -362,6 +362,7 @@ class Gicv3CPUInterface : public ArmISA::BaseISADevice, public Serializable
     Gicv3CPUInterface(Gicv3 * gic, ThreadContext *tc);
 
     void init();
+    void resetForWarmBoot();
 
   public:
     void copy(Gicv3Registers *from, Gicv3Registers *to);

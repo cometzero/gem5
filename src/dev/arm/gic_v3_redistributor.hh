@@ -257,6 +257,7 @@ class Gicv3Redistributor : public Serializable
     virtual ~Gicv3Redistributor() = default;
     uint32_t getAffinity() const;
     void init();
+    void resetForWarmBoot();
     uint64_t read(Addr addr, size_t size, bool is_secure_access);
     void sendPPInt(uint32_t int_id);
     void clearPPInt(uint32_t int_id);

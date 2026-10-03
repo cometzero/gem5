@@ -82,6 +82,24 @@ Gicv3Redistributor::Gicv3Redistributor(Gicv3 * gic, uint32_t cpu_id)
 }
 
 void
+Gicv3Redistributor::resetForWarmBoot()
+{
+    peInLowPowerState = true;
+    DPG1S = DPG1NS = DPG0 = EnableLPIs = false;
+    lpiConfigurationTablePtr = lpiPendingTablePtr = 0;
+    lpiIDBits = 0;
+    std::fill(irqGroup.begin(), irqGroup.end(), 0);
+    std::fill(irqEnabled.begin(), irqEnabled.end(), false);
+    std::fill(irqPending.begin(), irqPending.end(), false);
+    std::fill(irqPendingIspendr.begin(), irqPendingIspendr.end(), false);
+    std::fill(irqActive.begin(), irqActive.end(), false);
+    std::fill(irqGrpmod.begin(), irqGrpmod.end(), 0);
+    std::fill(irqNsacr.begin(), irqNsacr.end(), 0);
+    std::fill(irqPriority.begin(), irqPriority.end(), 0);
+    std::fill(irqConfig.begin(), irqConfig.end(), Gicv3::INT_EDGE_TRIGGERED);
+}
+
+void
 Gicv3Redistributor::init()
 {
     distributor = gic->getDistributor();

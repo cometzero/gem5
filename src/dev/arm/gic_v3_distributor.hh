@@ -268,6 +268,7 @@ class Gicv3Distributor : public Serializable
     void deassertSPI(uint32_t int_id);
     void clearIrqCpuInterface(uint32_t int_id);
     void init();
+    void resetForWarmBoot();
     uint64_t read(Addr addr, size_t size, bool is_secure_access);
     void write(Addr addr, uint64_t data, size_t size,
                bool is_secure_access);

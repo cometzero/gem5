@@ -102,3 +102,21 @@ class ArmFsFreebsd(ArmFsWorkload):
     type = "ArmFsFreebsd"
     cxx_header = "arch/arm/freebsd/fs_workload.hh"
     cxx_class = "gem5::ArmISA::FsFreebsd"
+
+
+class ZenaFsLinux(ArmFsLinux):
+    type = "ZenaFsLinux"
+    cxx_header = "arch/arm/zena_fs_workload.hh"
+    cxx_class = "gem5::ArmISA::ZenaFsLinux"
+
+    enable_warm_reset = Param.Bool(False, "Allow AP-only software warm reset")
+    # Resolve after construction: devices themselves depend on System,
+    # which depends on this workload. Direct SimObject Params form a cycle.
+    reset_uart_path = Param.String("", "Path of the Zena AP console")
+    reset_rtc_path = Param.String("", "Path of the Zena AP real-time clock")
+    reset_virtio_bases = VectorParam.Addr([], "Synchronous VirtIO MMIO bases")
+
+    @cxxMethod
+    def resetGuest(self):
+        """Reset a drained AP system after cache writeback/invalidation."""
+        pass

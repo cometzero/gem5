@@ -58,6 +58,8 @@ struct Pl011Params;
 class Pl011 : public Uart, public AmbaDevice
 {
   public:
+    void resetForWarmBoot();
+
     Pl011(const Pl011Params &p);
 
     void serialize(CheckpointOut &cp) const override;
