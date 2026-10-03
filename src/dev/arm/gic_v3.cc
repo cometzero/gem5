@@ -172,6 +172,18 @@ Gicv3::init()
     BaseGic::init();
 }
 
+void
+Gicv3::resetForWarmBoot()
+{
+    fatal_if(params().its, "Warm reset does not support an attached ITS");
+    distributor->resetForWarmBoot();
+    for (unsigned i = 0; i < redistributors.size(); ++i) {
+        redistributors[i]->resetForWarmBoot();
+        cpuInterfaces[i]->resetForWarmBoot();
+        deassertAll(i);
+    }
+}
+
 Tick
 Gicv3::read(PacketPtr pkt)
 {

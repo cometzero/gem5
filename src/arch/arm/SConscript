@@ -102,6 +102,7 @@ Source("linux/fs_workload.cc", tags=['arm isa'])
 Source("freebsd/fs_workload.cc", tags=['arm isa'])
 Source("freebsd/se_workload.cc", tags=['arm isa'])
 Source("fs_workload.cc", tags=['arm isa'])
+Source("zena_fs_workload.cc", tags=['arm isa'])
 Source("regs/int.cc", tags=['arm isa'])
 Source("regs/misc.cc", tags=['arm isa'])
 Source("regs/misc_info.cc", tags=['arm isa'])
@@ -130,7 +131,8 @@ SimObject(
     tags=['arm isa'])
 SimObject(
     "ArmFsWorkload.py",
-    sim_objects=["ArmFsWorkload", "ArmFsLinux", "ArmFsFreebsd"],
+    sim_objects=["ArmFsWorkload", "ArmFsLinux", "ArmFsFreebsd",
+                 "ZenaFsLinux"],
     enums=["ArmMachineType"],
     tags=['arm isa'],
 )

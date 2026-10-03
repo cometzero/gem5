@@ -271,6 +271,17 @@ ArchTimer::ArchTimer(const std::string &name,
 }
 
 void
+ArchTimer::resetForWarmBoot()
+{
+    if (_counterLimitReachedEvent.scheduled()) {
+        _parent.deschedule(_counterLimitReachedEvent);
+    }
+    _interrupt->clear();
+    _control = 0;
+    _counterLimit = _offset = 0;
+}
+
+void
 ArchTimer::counterLimitReached()
 {
     if (!_control.enable)
@@ -429,6 +440,33 @@ GenericTimer::GenericTimer(const GenericTimerParams &p)
     fatal_if(!p.system, "GenericTimer::GenericTimer: No system specified, "
              "can't instantiate architected timers\n");
     system.setGenericTimer(this);
+}
+
+void
+GenericTimer::resetForWarmBoot()
+{
+    // Preserve the shared monotonically increasing system counter.
+    for (auto &core : timers) {
+        if (core->physEvStream.event.scheduled()) {
+            deschedule(core->physEvStream.event);
+        }
+        if (core->virtEvStream.event.scheduled()) {
+            deschedule(core->virtEvStream.event);
+        }
+        core->cntfrq = params().cntfrq;
+        core->cntkctl = 0;
+        core->cnthctl = 0;
+        core->physEvStream.transitionTo = core->virtEvStream.transitionTo = 0;
+        core->physEvStream.transitionBit = core->virtEvStream.transitionBit =
+            0;
+        core->physEL3.resetForWarmBoot();
+        core->physEL1.resetForWarmBoot();
+        core->virtEL1.resetForWarmBoot();
+        core->physNsEL2.resetForWarmBoot();
+        core->virtNsEL2.resetForWarmBoot();
+        core->physSEL2.resetForWarmBoot();
+        core->virtSEL2.resetForWarmBoot();
+    }
 }
 
 void

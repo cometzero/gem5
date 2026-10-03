@@ -63,6 +63,19 @@ Pl011::Pl011(const Pl011Params &p)
 {
 }
 
+void
+Pl011::resetForWarmBoot()
+{
+    if (intEvent.scheduled()) {
+        deschedule(intEvent);
+    }
+    interrupt->clear();
+    control = 0x300;
+    fbrd = ibrd = lcrh = imsc = rawInt = 0;
+    ifls = 0x12;
+    // Preserve the terminal connection and any host-provided input.
+}
+
 Tick
 Pl011::read(PacketPtr pkt)
 {

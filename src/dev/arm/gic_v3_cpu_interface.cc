@@ -71,6 +71,17 @@ Gicv3CPUInterface::Gicv3CPUInterface(Gicv3 * gic, ThreadContext *_tc)
 }
 
 void
+Gicv3CPUInterface::resetForWarmBoot()
+{
+    maintenanceInterrupt->clear();
+    hppi.prio = 0xff;
+    hppi.intid = Gicv3::INTID_SPURIOUS;
+    hppi.group = Gicv3::G0S;
+    // Architectural ICC/ICH registers belong to the ISA and are reset by
+    // Reset::invoke. Keep this object: ISA owns the CPU interface pointer.
+}
+
+void
 Gicv3CPUInterface::init()
 {
     redistributor = gic->getRedistributor(cpuId);
