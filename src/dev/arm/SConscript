@@ -71,6 +71,7 @@ SimObject(
     enums=['ArmInterruptType'],
     tags=['arm isa']
 )
+SimObject('ZenaCSS.py', sim_objects=[], tags=['arm isa'])
 SimObject('Mpam.py', sim_objects=['MpamMSC'], tags=['arm isa'])
 SimObject(
     'RealView.py',
