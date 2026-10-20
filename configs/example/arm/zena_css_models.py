@@ -13,6 +13,7 @@ from m5.objects import (
     AddrRange,
     DDR3_1600_8x8,
     DDR4_2400_8x8,
+    LPDDR5_6400_1x16_BG_BL32,
     MemCtrl,
     SimpleMemory,
 )
@@ -23,6 +24,35 @@ from m5.util.convert import (
     toMemorySize,
     toVoltage,
 )
+
+
+class LPDDR5X_8533_1x16_BG_BL32(LPDDR5_6400_1x16_BG_BL32):
+    """8533-bin sensitivity model, NOT a calibrated LPDDR5X part.
+
+    Retain the LPDDR5 absolute array/read/write/refresh latencies. Change
+    only the CK-derived bus timings for WCK:CK=4:1, 8533.333 MT/s nominal.
+    In particular, do not reduce tCL/tCWL merely by increasing the data rate.
+    The synthetic density is assigned separately by configure_memory().
+    """
+
+    tCK = "0.9375ns"
+    tBURST = "5.625ns"  # BL32: two sub-bursts plus gap, 6 CK
+    tBURST_MIN = "1.875ns"  # interleaved burst starts after 2 CK
+    tBURST_MAX = "7.5ns"  # same-bank-group array cycle, 8 CK
+    tCCD_L = "7.5ns"
+    tRTW = "0.9375ns"
+    tCS = "1.875ns"
+    tPPD = "1.875ns"
+    tAAD = "7.5ns"
+    tRTP = "5.625ns"  # max(2 CK, 7.5 ns) - 2 CK
+
+
+DRAM_INTERFACES = {
+    "ddr3-1600": DDR3_1600_8x8,
+    "ddr4-2400": DDR4_2400_8x8,
+    "lpddr5-6400": LPDDR5_6400_1x16_BG_BL32,
+    "lpddr5x-8533": LPDDR5X_8533_1x16_BG_BL32,
+}
 
 
 def positive_int(value):
@@ -55,18 +85,19 @@ def add_options(parser):
     )
     parser.add_argument(
         "--memory-model",
-        choices=("simple", "ddr3-1600", "ddr4-2400"),
+        choices=("simple", *DRAM_INTERFACES),
         default="simple",
     )
     parser.add_argument("--memory-latency", default="30ns")
     parser.add_argument("--memory-bandwidth", default="12.8GiB/s")
     parser.add_argument(
-        "--memory-channels", type=int, choices=(1, 2, 4), default=1
+        "--memory-channels", type=int, choices=(1, 2, 4, 8, 16), default=1
     )
     parser.add_argument(
         "--dram-page-policy",
         choices=("open", "open_adaptive", "close", "close_adaptive"),
-        default="open_adaptive",
+        default=None,
+        help="Default: close_adaptive for LPDDR, open_adaptive otherwise",
     )
     parser.add_argument(
         "--dram-scheduler", choices=("fcfs", "frfcfs"), default="frfcfs"
@@ -143,10 +174,21 @@ def settings(args):
     ):
         raise ValueError("SimpleMemory latency/bandwidth do not apply to DRAM")
     if args.memory_model == "simple" and (
-        args.dram_page_policy != "open_adaptive"
+        args.dram_page_policy not in (None, "open_adaptive")
         or args.dram_scheduler != "frfcfs"
     ):
         raise ValueError("DRAM page/scheduler options require a DRAM model")
+    lpddr = args.memory_model.startswith("lpddr")
+    interface = DRAM_INTERFACES.get(args.memory_model)
+    devices = int(interface.devices_per_rank.value) if interface else None
+    width = int(interface.device_bus_width.value) if interface else None
+    page_policy = args.dram_page_policy or (
+        "close_adaptive" if lpddr else "open_adaptive"
+    )
+    rate = {
+        "lpddr5-6400": 6400,
+        "lpddr5x-8533": 8000 / 0.9375,
+    }.get(args.memory_model)
     return {
         "qualification": "GENERIC_MODEL_NOT_CALIBRATED",
         "cpu_clock": args.cpu_clock,
@@ -187,16 +229,31 @@ def settings(args):
         "memory_latency": args.memory_latency,
         "memory_bandwidth": args.memory_bandwidth,
         "memory_channels": args.memory_channels,
-        "dram_page_policy": args.dram_page_policy,
+        "dram_page_policy": page_policy,
         "dram_scheduler": args.dram_scheduler,
         "dram_ranks_per_channel": 1 if args.memory_model != "simple" else None,
+        "dram_devices_per_rank": devices,
+        "dram_device_bus_width_bits": width,
+        "dram_channel_width_bits": devices * width if interface else None,
+        "dram_data_rate_mtps": rate,
+        "dram_theoretical_peak_bytes_per_second": (
+            rate * 1e6 * devices * width / 8 * args.memory_channels
+            if rate
+            else None
+        ),
+        "dram_timing_qualification": (
+            "LPDDR5_DERIVED_NOT_CALIBRATED_LPDDR5X"
+            if args.memory_model == "lpddr5x-8533"
+            else "UPSTREAM_PRESET" if interface else None
+        ),
+        "dram_power_qualification": "UNSUPPORTED" if lpddr else None,
         "dram_device_size_bytes": (
-            2 * 1024**3 // args.memory_channels // 8
+            2 * 1024**3 // args.memory_channels // devices
             if args.memory_model != "simple"
             else None
         ),
         "dram_capacity_note": (
-            "Synthetic density with preset timing; not a physical DIMM"
+            "Synthetic density with preset timing; not a physical device"
             if args.memory_model != "simple"
             else None
         ),
@@ -212,10 +269,7 @@ def configure_memory(system, model):
         )
         system.memory.port = system.membus.mem_side_ports
         return
-    interface = {
-        "ddr3-1600": DDR3_1600_8x8,
-        "ddr4-2400": DDR4_2400_8x8,
-    }[model["memory_model"]]
+    interface = DRAM_INTERFACES[model["memory_model"]]
     channels = model["memory_channels"]
     bits = int(math.log2(channels))
     controllers = []
