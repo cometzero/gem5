@@ -463,6 +463,7 @@ TBE allocateRequestTBE(Addr addr, CHIRequestMsg in_msg), return_by_pointer="yes"
 
   tbe.isSeqReqValid := in_msg.isSeqReqValid;
   tbe.seqReq := in_msg.seqReq;
+  tbe.uncacheable := in_msg.uncacheable;
   tbe.is_local_pf := in_msg.is_local_pf;
   tbe.is_remote_pf := in_msg.is_remote_pf;
 
@@ -504,6 +505,7 @@ TBE allocateDvmRequestTBE(Addr txnId, CHIRequestMsg in_msg), return_by_pointer="
 
   tbe.isSeqReqValid := in_msg.isSeqReqValid;
   tbe.seqReq := in_msg.seqReq;
+  tbe.uncacheable := in_msg.uncacheable;
   tbe.is_local_pf := in_msg.is_local_pf;
   tbe.is_remote_pf := in_msg.is_remote_pf;
 
@@ -685,6 +687,7 @@ void prepareRequest(TBE tbe, CHIRequestType type, CHIRequestMsg & out_msg) {
   tbe.pendReqType := type;
   out_msg.isSeqReqValid := tbe.isSeqReqValid;
   out_msg.seqReq := tbe.seqReq;
+  out_msg.uncacheable := tbe.uncacheable;
   out_msg.is_local_pf := false;
   out_msg.is_remote_pf := tbe.is_local_pf || tbe.is_remote_pf;
   out_msg.txnId := tbe.txnId;
@@ -749,6 +752,7 @@ void prepareRequestRetry(TBE tbe, CHIRequestMsg & out_msg) {
   out_msg.retToSrc := tbe.pendReqRetToSrc;
   out_msg.isSeqReqValid := tbe.isSeqReqValid;
   out_msg.seqReq := tbe.seqReq;
+  out_msg.uncacheable := tbe.uncacheable;
   out_msg.is_local_pf := false;
   out_msg.is_remote_pf := tbe.is_local_pf || tbe.is_remote_pf;
   out_msg.atomic_op.clear();
@@ -773,6 +777,7 @@ void prepareRequestRetryDVM(TBE tbe, CHIRequestMsg & out_msg) {
   out_msg.retToSrc := tbe.pendReqRetToSrc;
   out_msg.isSeqReqValid := tbe.isSeqReqValid;
   out_msg.seqReq := tbe.seqReq;
+  out_msg.uncacheable := tbe.uncacheable;
   out_msg.is_local_pf := false;
   out_msg.is_remote_pf := tbe.is_local_pf || tbe.is_remote_pf;
 }
@@ -855,6 +860,46 @@ void printResources() {
                 triggerQueue.getSize(curTick()));
 }
 
+// The private L2 distinguishes instruction and data copies by controller ID,
+// including requests (such as copybacks) without a CPU RequestPtr.
+bool hasExclusiveDataSharer(TBE tbe) {
+  if (exclusive_data_upstream_version < 0) {
+    return false;
+  }
+  MachineID data_cache := createMachineID(MachineType:Cache,
+                            intToID(exclusive_data_upstream_version));
+  return tbe.dir_sharers.isElement(data_cache);
+}
+
+bool admitsCleanDataVictim(TBE tbe) {
+  if (exclusive_data_upstream_version < 0) {
+    return false;
+  }
+  MachineID data_cache := createMachineID(MachineType:Cache,
+                            intToID(exclusive_data_upstream_version));
+  return (tbe.reqType == CHIRequestType:Evict) &&
+         (tbe.requestor == data_cache);
+}
+
+bool dropForExclusiveDataRequest(TBE tbe) {
+  if (exclusive_data_upstream_version < 0) {
+    return false;
+  }
+  MachineID data_cache := createMachineID(MachineType:Cache,
+                            intToID(exclusive_data_upstream_version));
+  bool data_request := tbe.requestor == data_cache;
+  bool acquiring := (tbe.reqType == CHIRequestType:ReadShared) ||
+                    (tbe.reqType == CHIRequestType:ReadNotSharedDirty) ||
+                    (tbe.reqType == CHIRequestType:ReadUnique) ||
+                    (tbe.reqType == CHIRequestType:MakeReadUnique) ||
+                    (tbe.reqType == CHIRequestType:CleanUnique);
+  bool evicting := (tbe.reqType == CHIRequestType:WriteBackFull) ||
+                   (tbe.reqType == CHIRequestType:WriteEvictFull) ||
+                   (tbe.reqType == CHIRequestType:Evict);
+  return (data_request && acquiring) ||
+         (hasExclusiveDataSharer(tbe) && !(data_request && evicting));
+}
+
 bool needCacheEntry(CHIRequestType req_type,
                     CacheEntry cache_entry, DirEntry dir_entry,
                     bool is_prefetch) {
@@ -895,7 +940,9 @@ bool needCacheEntry(CHIRequestType req_type,
 }
 
 bool needDeallocCacheEntry(CHIRequestType req_type) {
-  return (dealloc_on_shared && ((req_type == CHIRequestType:ReadShared) ||
+  return (req_type == CHIRequestType:CacheClean) ||
+         (req_type == CHIRequestType:CacheInvalidate) ||
+         (dealloc_on_shared && ((req_type == CHIRequestType:ReadShared) ||
                                 (req_type == CHIRequestType:ReadNotSharedDirty) ||
                                 (req_type == CHIRequestType:StashOnceShared))) ||
          (dealloc_on_unique && ((req_type == CHIRequestType:ReadUnique) ||
@@ -1303,7 +1350,22 @@ bool isStashSnpType(CHIRequestType type) {
 ////////////////////////////////////////////////////////////////////////////
 // State->Event converters
 
-Event reqToEvent(CHIRequestType type, bool is_prefetch) {
+Event reqToEvent(CHIRequestType type, bool is_prefetch, bool uncacheable) {
+  if ((type == CHIRequestType:CacheClean) ||
+      (type == CHIRequestType:CacheInvalidate)) {
+    return Event:CacheMaintenance;
+  }
+  if (uncacheable) {
+    if (type == CHIRequestType:Load) {
+      return Event:UncachedLoad;
+    } else if ((type == CHIRequestType:Store) ||
+               (type == CHIRequestType:StoreLine)) {
+      return Event:UncachedStore;
+    } else if ((type == CHIRequestType:WriteUniqueFull) ||
+               (type == CHIRequestType:WriteUniquePtl)) {
+      return Event:UncachedWriteUnique;
+    }
+  }
   if (type == CHIRequestType:Load) {
     if (is_prefetch == false) {
       return Event:Load;

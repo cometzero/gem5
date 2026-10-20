@@ -125,6 +125,8 @@ class Sequencer : public RubyPort
     }
 
     // Write callback that prevents coalescing
+    void getWriteData(Addr address, DataBlock &data);
+
     void writeUniqueCallback(Addr address, DataBlock& data)
     {
         writeCallbackCBusy(address, data, true, -1, MachineType_NUM, Cycles(0),

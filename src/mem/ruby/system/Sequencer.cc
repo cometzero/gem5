@@ -456,6 +456,17 @@ Sequencer::recordMissLatency(SequencerRequest* srequest, bool llscSuccess,
 }
 
 void
+Sequencer::getWriteData(Addr address, DataBlock &data)
+{
+    assert(address == makeLineAddress(address));
+    auto it = m_RequestTable.find(address);
+    assert(it != m_RequestTable.end() && !it->second.empty());
+    PacketPtr pkt = it->second.front().pkt;
+    assert(pkt->isWrite() && !pkt->req->isCacheMaintenance());
+    data.setData(pkt);
+}
+
+void
 Sequencer::writeCallbackScFail(Addr address, DataBlock& data)
 {
     llscClearMonitor(address);
@@ -776,7 +787,8 @@ Sequencer::hitCallback(SequencerRequest *srequest, DataBlock &data,
     // update the data unless it is a non-data-carrying flush
     if (m_ruby_system->getWarmupEnabled()) {
         data.setData(pkt);
-    } else if (!pkt->isFlush() && !pkt->isCleanInvalidateRequest()) {
+    } else if (!pkt->isFlush() && !pkt->isCleanInvalidateRequest() &&
+               !pkt->req->isCacheMaintenance()) {
         if ((type == RubyRequestType_LD) || (type == RubyRequestType_IFETCH) ||
             (type == RubyRequestType_RMW_Read) ||
             (type == RubyRequestType_Locked_RMW_Read) ||
@@ -1100,7 +1112,8 @@ Sequencer::makeRequest(PacketPtr pkt)
                     primary_type = secondary_type = RubyRequestType_LD;
                 }
             }
-        } else if (pkt->isFlush() || pkt->isCleanInvalidateRequest()) {
+        } else if (pkt->isFlush() || pkt->isCleanInvalidateRequest() ||
+                   pkt->req->isCacheMaintenance()) {
             primary_type = secondary_type = RubyRequestType_FLUSH;
         } else if (pkt->cmd == MemCmd::MemSyncReq) {
             primary_type = secondary_type = RubyRequestType_REPLACEMENT;

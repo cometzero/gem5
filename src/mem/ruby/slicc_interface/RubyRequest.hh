@@ -305,6 +305,16 @@ class RubyRequest : public Message
     {
         m_StashLPIDValid = false;
     }
+    bool
+    isUncacheable() const
+    {
+        return m_pkt && m_pkt->req->isUncacheable();
+    }
+    bool
+    isCacheClean() const
+    {
+        return m_pkt && m_pkt->req->isCacheClean();
+    }
 
     void setWriteMask(uint32_t offset, uint32_t len,
         std::vector< std::pair<int,AtomicOpFunctor*>> atomicOps);

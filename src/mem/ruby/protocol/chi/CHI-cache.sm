@@ -165,6 +165,9 @@ machine(MachineType:Cache, "Cache coherency protocol") :
   bool alloc_on_seq_line_write;
   bool alloc_on_atomic;
   // Controls if the clusivity is strict.
+  // Optional private-L2 policy: retain directory entries, but never data
+  // alongside this upstream L1D. Other upstream caches remain non-inclusive.
+  int exclusive_data_upstream_version := -1;
   bool dealloc_on_unique;
   bool dealloc_on_shared;
   bool dealloc_backinv_unique;
@@ -300,6 +303,15 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     // request or snoop to the ready queue
     AllocRequest,           desc="Allocates a TBE for a request. Triggers a retry if table is full";
     AllocRequestWithCredit, desc="Allocates a TBE for a request. Always succeeds.";
+    CacheMaintenance, in_trans="yes", desc="CPU maintenance to PoC";
+    CacheMaintenanceWriteback, desc="Retire local dirty ownership";
+    CacheMaintenanceSend, out_trans="yes", desc="Forward maintenance request";
+    CacheMaintenanceForward, desc="Forward maintenance to PoC";
+    UncachedStoreDone, desc="Complete NC store after downstream completion";
+    CacheMaintenanceDone, desc="Complete maintenance";
+    UncachedLoad, in_trans="yes", desc="CPU non-allocating load";
+    UncachedWriteUnique, in_trans="yes", desc="Nonallocating ordered NC write forwarding";
+    UncachedStore, in_trans="yes", desc="CPU non-allocating store";
     AllocSeqRequest,        desc="Allocates a TBE for a sequencer request. Stalls requests if table is full";
     AllocSeqDvmRequest,     desc="Allocates a TBE for a sequencer DVM request. Stalls requests if table is full";
     AllocPfRequest,         desc="Allocates a TBE for a prefetch request. Stalls requests if table is full";
@@ -723,6 +735,7 @@ machine(MachineType:Cache, "Cache coherency protocol") :
     // information (e.g., PC of requesting instruction, virtual address of this
     // request, etc.). Not all transactions have this field set if they are not
     // triggered directly by a demand request from CPU.
+    bool uncacheable, default="false", desc="CPU non-cacheable access";
     RequestPtr seqReq,      default="nullptr", desc="Pointer to original request from CPU/sequencer";
     bool isSeqReqValid,     default="false",   desc="Set if seqReq is valid (not nullptr)";
 

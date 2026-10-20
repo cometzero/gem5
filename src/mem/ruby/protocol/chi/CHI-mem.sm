@@ -48,6 +48,7 @@ machine(MachineType:Memory, "Memory controller interface") :
 
   int data_channel_size;
   BackpressureGen * cbusy_generator, default="NULL";
+  bool wait_for_write_ack := "False";
 
   // Interface to the network
   // Note vnet_type is used by Garnet only. "response" type is assumed to
@@ -85,6 +86,7 @@ machine(MachineType:Memory, "Memory controller interface") :
     // We don't know if the line is cached, so the memory copy is maybe stable
     READY, AccessPermission:Backing_Store, desc="Ready to transfer the line";
 
+    WRITING_MEM, AccessPermission:Backing_Store_Busy, desc="Waiting ordered write response";
     WAITING_NET_DATA, AccessPermission:Backing_Store_Busy, desc="Waiting data from the network";
     SENDING_NET_DATA, AccessPermission:Backing_Store_Busy, desc="Sending data to the network";
     READING_MEM, AccessPermission:Backing_Store_Busy, desc="Waiting data from memory";
@@ -120,6 +122,7 @@ machine(MachineType:Memory, "Memory controller interface") :
     Trigger_Send, desc="";
     Trigger_SendDone, desc="";
     Trigger_ReceiveDone, desc="";
+    Trigger_ReceiveDoneOrdered, desc="";
     Trigger_SendRetry, desc="";
     Trigger_SendPCrdGrant, desc="";
     Trigger_SendMemoryRead, desc="";
@@ -577,7 +580,11 @@ machine(MachineType:Memory, "Memory controller interface") :
     assert(is_valid(tbe));
     enqueue(rspOutPort, CHIResponseMsg, response_latency) {
       out_msg.addr := address;
-      out_msg.type := CHIResponseType:CompDBIDResp;
+      if (wait_for_write_ack) {
+        out_msg.type := CHIResponseType:DBIDResp;
+      } else {
+        out_msg.type := CHIResponseType:CompDBIDResp;
+      }
       out_msg.responder := machineID;
       out_msg.Destination.add(tbe.requestor);
       out_msg.cbusy := getCurrCBusy(out_msg);
@@ -679,7 +686,11 @@ machine(MachineType:Memory, "Memory controller interface") :
     if (tbe.rxtxBytes == tbe.accSize) {
       enqueue(triggerOutPort, TriggerMsg, 0) {
         out_msg.addr := address;
-        out_msg.event := Event:Trigger_ReceiveDone;
+        if (wait_for_write_ack) {
+          out_msg.event := Event:Trigger_ReceiveDoneOrdered;
+        } else {
+          out_msg.event := Event:Trigger_ReceiveDone;
+        }
       }
       tbe.rxtxBytes := 0;
       assert(tbe.dataBlkValid.getMask(addressOffset(tbe.accAddr, tbe.addr), tbe.accSize));
@@ -793,6 +804,29 @@ machine(MachineType:Memory, "Memory controller interface") :
     popDataInQueue;
   }
 
+  action(sendOrderedComp, desc="Write is accepted by the memory controller") {
+    enqueue(rspOutPort, CHIResponseMsg, response_latency) {
+      out_msg.addr := address;
+      out_msg.type := CHIResponseType:Comp;
+      out_msg.responder := machineID;
+      out_msg.Destination.add(tbe.requestor);
+      out_msg.cbusy := getCurrCBusy(out_msg);
+    }
+  }
+
+  transition(WAITING_NET_DATA, Trigger_ReceiveDoneOrdered, WRITING_MEM) {
+    sendMemoryWrite;
+    popTriggerQueue;
+  }
+
+  transition(WRITING_MEM, MemoryAck, READY) {
+    decWritePending;
+    sendOrderedComp;
+    deallocateTBE;
+    wakeUpStalled;
+    popMemoryQueue;
+  }
+
   transition(WAITING_NET_DATA, Trigger_ReceiveDone, READY) {
     sendMemoryWrite;
     deallocateTBE;
@@ -814,29 +848,29 @@ machine(MachineType:Memory, "Memory controller interface") :
   }
 
   // Notice we only use this here and call wakeUp when leaving this state
-  transition({READING_MEM,WAITING_NET_DATA,SENDING_NET_DATA},
+  transition({READING_MEM,WAITING_NET_DATA,SENDING_NET_DATA,WRITING_MEM},
              {ReadNoSnp, ReadNoSnpSep, WriteNoSnpPtl, WriteNoSnp}) {
     stallRequestQueue;
   }
 
-  transition({READING_MEM,WAITING_NET_DATA,SENDING_NET_DATA,READY},
+  transition({READING_MEM,WAITING_NET_DATA,SENDING_NET_DATA,WRITING_MEM,READY},
               Trigger_SendRetry) {
     sendRetryAck;
     popTriggerQueue;
   }
 
-  transition({READING_MEM,WAITING_NET_DATA,SENDING_NET_DATA,READY},
+  transition({READING_MEM,WAITING_NET_DATA,SENDING_NET_DATA,WRITING_MEM,READY},
               Trigger_SendPCrdGrant) {
     sendPCrdGrant;
     popTriggerQueue;
   }
 
-  transition({READING_MEM,WAITING_NET_DATA,SENDING_NET_DATA,READY},
+  transition({READING_MEM,WAITING_NET_DATA,SENDING_NET_DATA,WRITING_MEM,READY},
               CheckAllocTBE) {
     checkAllocateTBE;
   }
 
-  transition({READING_MEM,WAITING_NET_DATA,SENDING_NET_DATA,READY},
+  transition({READING_MEM,WAITING_NET_DATA,SENDING_NET_DATA,WRITING_MEM,READY},
               CheckAllocTBE_WithCredit) {
     checkAllocateTBE_withCredit;
   }

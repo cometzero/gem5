@@ -1219,6 +1219,7 @@ transition({BUSY_BLKD,BUSY_INTR},
             ReadNoSnp,
             ReadOnce, CleanUnique, CleanUnique_Stale,
             Load, Store, AtomicLoad, AtomicStore, Prefetch,
+            CacheMaintenance, UncachedLoad, UncachedStore, UncachedWriteUnique,
             MakeReadUnique,
             WriteBackFull, WriteBackFull_Stale,
             WriteEvictFull, WriteEvictFull_Stale,
@@ -1335,6 +1336,7 @@ transition({BUSY_BLKD, BUSY_INTR}, SendCompData, BUSY_BLKD) {
 transition(BUSY_BLKD, SendWBData) {
   Pop_TriggerQueue;
   Send_WBData;
+  CheckWUComp;
   ProcessNextState_ClearPending;
 }
 
@@ -2103,4 +2105,57 @@ transition(DvmExtSync_Executing, DvmSync_ExternCompleted, DvmExtOp_Finished) {
 transition(DvmExtOp_Finished, Final, I) {
   Pop_TriggerQueue;
   Finalize_DeallocateDvmSnoop;
+}
+
+transition({I,SC,UC,SD,UD,UD_T,RU,RSC,RSD,RUSD,SC_RSC,UC_RSC,SD_RSC,UD_RSC,UC_RU,UD_RU,UD_RSD,SD_RSD,RUSC}, CacheMaintenance, BUSY_BLKD) {
+  Initiate_Request;
+  Initiate_CacheMaintenance;
+  Pop_ReqRdyQueue;
+  ProcessNextState;
+}
+transition({I,SC,UC,SD,UD,UD_T,RU,RSC,RSD,RUSD,SC_RSC,UC_RSC,SD_RSC,UD_RSC,UC_RU,UD_RU,UD_RSD,SD_RSD,RUSC}, UncachedLoad, BUSY_BLKD) {
+  Initiate_Request;
+  Initiate_UncachedLoad;
+  Pop_ReqRdyQueue;
+  ProcessNextState;
+}
+transition({I,SC,UC,SD,UD,UD_T,RU,RSC,RSD,RUSD,SC_RSC,UC_RSC,SD_RSC,UD_RSC,UC_RU,UD_RU,UD_RSD,SD_RSD,RUSC}, UncachedStore, BUSY_BLKD) {
+  Initiate_Request;
+  Initiate_UncachedStore;
+  Pop_ReqRdyQueue;
+  ProcessNextState;
+}
+transition(BUSY_BLKD, CacheMaintenanceWriteback) {
+  Pop_TriggerQueue;
+  CacheMaintenance_Writeback;
+  ProcessNextState_ClearPending;
+}
+transition(BUSY_BLKD, CacheMaintenanceForward) {
+  Pop_TriggerQueue;
+  CacheMaintenance_Forward;
+  ProcessNextState_ClearPending;
+}
+transition(BUSY_BLKD, CacheMaintenanceDone) {
+  Pop_TriggerQueue;
+  CacheMaintenance_Done;
+  ProcessNextState_ClearPending;
+}
+
+transition({I,SC,UC,SD,UD,UD_T,RU,RSC,RSD,RUSD,SC_RSC,UC_RSC,SD_RSC,UD_RSC,UC_RU,UD_RU,UD_RSD,SD_RSD,RUSC}, UncachedWriteUnique, BUSY_BLKD) {
+  Initiate_Request;
+  Initiate_UncachedWriteUnique;
+  Pop_ReqRdyQueue;
+  ProcessNextState;
+}
+transition(BUSY_BLKD, UncachedStoreDone) {
+  Pop_TriggerQueue;
+  UncachedStore_Done;
+  ProcessNextState_ClearPending;
+}
+
+transition(BUSY_BLKD, CacheMaintenanceSend, BUSY_INTR) {DestinationAvailable} {
+  Pop_TriggerQueue;
+  CacheMaintenance_Send;
+  Profile_OutgoingStart;
+  ProcessNextState_ClearPending;
 }
