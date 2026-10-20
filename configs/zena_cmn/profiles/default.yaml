@@ -1,0 +1,251 @@
+%YAML 1.1
+---
+# 설계 입력 예시: Codex가 parser를 구현해야 한다. gem5에서 바로 실행하는 파일이 아니다.
+schema_version: '0.1'
+artifact_kind: design_input_contract_not_native_gem5_config
+model:
+    name: zena_cpu_cmn_uncalibrated_proxy
+    gem5_tag: v25.1.0.1
+    calibration_status: uncalibrated
+    hardware_claim: topology_oriented_approximation_only
+scope:
+    cpu_coherent: true
+    npu_present: false
+    future_npu_coherent: false
+    future_npu_attach_contract: outside_cpu_home_domain_same_native_dram_backend
+    implement_flexnoc_now: false
+npu:
+    enabled: false
+    enable_async_dma: false
+    experimental_scaling: false
+    dma_issue_width: 1
+    clock: 1GHz
+    sram_size: 2097152
+    sram_banks: 16
+    sram_bank_width: 4
+    sram_latency: 2
+    bank_queue_depth: 4
+    max_outstanding: 16
+    dma_width: 16
+    fabric_width: 32
+    fabric_frontend_latency: 1
+    fabric_forward_latency: 1
+    fabric_response_latency: 1
+    smmu:
+        device_xlate_slots: 16
+        device_wrbuf_slots: 16
+        device_utlb_slots: 1
+        device_tlb_slots: 3
+        xlate_slots: 64
+        ptw_slots: 16
+cpu:
+    execution_profile: generic
+    model: ArmO3CPU
+    cores: 16
+    clusters: 4
+    cores_per_cluster: 4
+    clock: 2GHz
+    rob_entries: 192
+    iq_entries: 128
+    lq_entries: 32
+    sq_entries: 64
+    prefetch_enabled: false
+    microarchitecture_source: generic_arm_o3_with_user_queue_baseline
+    impersonate_a720ae_midr: false
+cache:
+    integrated_private_pipeline: false
+    line_bytes: 64
+    l1i:
+        size_kib_per_core: 64
+        assoc: 4
+        tag_latency_cycles: 1
+        data_latency_cycles: 1
+        tag_banks: 1
+        data_banks: 1
+        request_tbes: 16
+    l1d:
+        size_kib_per_core: 64
+        assoc: 4
+        tag_latency_cycles: 1
+        data_latency_cycles: 2
+        tag_banks: 1
+        data_banks: 1
+        request_tbes: 16
+    l2:
+        read_hit_pipeline_cycles: 0
+        policy: inclusive
+        prefetch: 'off'
+        private: true
+        size_kib_per_core: 512
+        assoc: 8
+        tag_latency_cycles: 2
+        data_latency_cycles: 6
+        tag_banks: 2
+        data_banks: 2
+        request_tbes: 32
+    dsu_l3:
+        instances: 4
+        size_mib_per_cluster: 4
+        assoc: 16
+        is_home: false
+        tag_latency_cycles: 2
+        data_latency_cycles: 10
+        tag_banks: 4
+        data_banks: 4
+        request_tbes: 128
+    resource_stalls: true
+    size_latency_bank_provenance: uncalibrated_assumptions_except_user_l1d_size
+    controller_pipeline_latency_policy: inherit_pinned_version_and_dump_all_resolved_values
+    snoop_replacement_dvm_tbe_policy: keep_separate_progress_safe_pinned_defaults_or_explicitly_documented_overrides
+ruby:
+    protocol: CHI
+    clock: 2GHz
+    instruction_sequencer_outstanding: 16
+    data_sequencer_outstanding: 64
+    timing_dvm: false
+    functional_tlbi_required: true
+    add_shadow_store_coherency_hack: false
+cmn:
+    network: garnet
+    implementation: Ruby_CHI_Garnet_uncalibrated_proxy
+    home_count: 8
+    home_request_tbes: 64
+    slc_mode: allocate
+    slc_size_mib_total: 8
+    slc_size_kib_per_home: 1024
+    slc_assoc: 16
+    slc_tag_latency_cycles: 2
+    slc_data_latency_cycles: 10
+    slc_tag_banks: 2
+    slc_data_banks: 2
+    dmt: false
+    dct: false
+    data_channel_bytes: 32
+    mesh:
+        rows: 4
+        columns: 4
+        clock: 2GHz
+        flit_bytes: 32
+        router_latency_cycles: 1
+        router_link_latency_cycles: 1
+        node_link_latency_cycles: 1
+        vcs_per_vnet: 4
+        control_buffer_flits: 4
+        data_buffer_flits: 8
+        cluster_local_routers: 4
+        cluster_mesh_edges_per_direction: 1
+        cluster_attach:
+            - 5
+            - 6
+            - 9
+            - 10
+        home_attach:
+            - 0
+            - 2
+            - 5
+            - 7
+            - 8
+            - 10
+            - 13
+            - 15
+        snf_attach_for_16_channels:
+            - 0
+            - 1
+            - 2
+            - 3
+            - 4
+            - 5
+            - 6
+            - 7
+            - 8
+            - 9
+            - 10
+            - 11
+            - 12
+            - 13
+            - 14
+            - 15
+    physical_cmn_channels_modelled_exactly: false
+    finite_vendor_snoop_filter_modelled_exactly: false
+memory:
+    backend: native_MemCtrl_DRAMInterface
+    model_source: reuse_existing_user_lpddr5x_class
+    preserve_device_geometry: false
+    custom_module:
+    custom_class:
+    missing_custom_model_policy: fail_fast_no_6400_fallback
+    channels: 16
+    supported_comparison_channels:
+        - 4
+        - 8
+        - 16
+    channel_width_bits: 16
+    data_rate_mt_s: 8533
+    capacity_mib_total: 2048
+    base_address_source: existing_arm_platform_system_mem_ranges
+    interleave_bytes: 64
+    channel_xor_enabled: false
+    home_count: 8
+    home_select: (PA >> 6) & 7
+    channel_select: (PA >> 6) & (channels - 1)
+    snf_request_tbes: 64
+    preserve_all_existing_timing_parameters: true
+    preserve_existing_scheduler_and_page_policy: true
+    boot_rom_is_not_a_dram_channel: true
+    create_backend_exactly_once: true
+    create_future_npu_arbiter_now: false
+full_system:
+    kernel:
+    disk_image:
+    bootloader:
+    dtb:
+    platform_source: discover_existing_working_arm_fs_platform
+    boot_cpu: ArmAtomicSimpleCPU
+    boot_memory_mode: atomic_noncaching
+    roi_cpu: ArmO3CPU
+    roi_memory_mode: timing
+    warmup_after_cpu_switch: true
+    validate_direct_timing_reference: true
+    cross_hierarchy_checkpoint_restore: reject_unless_compatibility_explicitly_validated
+    required_linux_cpu_clusters: 4
+benchmark:
+    read_working_set_mib_total: 256
+    copy_buffers_mib_total: 256
+    stream_array_mib_each: 128
+    stream_array_count: 3
+    default_passes: 2
+    convergence_passes:
+        - 2
+        - 4
+        - 8
+    worker_counts:
+        - 1
+        - 4
+        - 8
+        - 16
+    keep_aggregate_working_set_constant: true
+    exclude_initialization_warmup_checksum: true
+    include_barrier_kernel_irq: true
+    force_cpu_bandwidth_target: false
+provenance:
+    user_fixed:
+        - gem5_tag
+        - cpu_core_cluster_count
+        - cpu_clock
+        - cpu_queue_baseline
+        - noncoherent_future_npu
+        - memory_data_rate_and_width
+        - memory_total_capacity
+    reuse_existing:
+        - lpddr5x_timing_geometry_scheduler
+        - fs_assets
+        - platform_io
+    uncalibrated:
+        - cache_sizes_other_than_user_l1d
+        - cache_associativity_latencies_banks
+        - ruby_tbe_limits
+        - mesh_topology
+        - placement
+        - flit_width
+        - vc_depth
+        - dmt_dct_bringup_policy
