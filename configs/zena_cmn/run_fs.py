@@ -125,6 +125,7 @@ def main():
         mem_ranges=[AddrRange(ZenaCSS._RAM_BASE, size=ZenaCSS._RAM_SIZE)],
         cpu_affinities=[ZenaCSS.affinity(i) for i in range(args.cpus)],
         release=ap_release(),
+        sve_vl=1,
         highest_el_is_64=True,
         phys_addr_range_64=48,
         auto_reset_addr=False,

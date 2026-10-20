@@ -22,15 +22,24 @@ from m5.objects import (
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "configs"))
-from zena_cmn.cpu_profile import ap_release
+from zena_cmn.cpu_profile import (
+    ap_release,
+    create_cpu,
+)
+from zena_cmn.parameters import load_parameters
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--stlur", action="store_true")
+parser.add_argument("--sve-el0", action="store_true")
+parser.add_argument("--o3", action="store_true")
 args = parser.parse_args()
+if args.stlur and args.sve_el0:
+    parser.error("select one instruction regression")
 ram = 0x80000000
 system = ArmSystem(
     workload=ArmFsWorkload(),
     release=ap_release(),
+    sve_vl=1,
     mem_mode="timing",
     reset_addr=ram,
     auto_reset_addr=False,
@@ -47,7 +56,19 @@ system.bus = NoncoherentXBar(
 system.memory = SimpleMemory(range=system.mem_ranges[0], latency="10ns")
 system.memory.port = system.bus.mem_side_ports
 system.system_port = system.bus.cpu_side_ports
-system.cpu = ArmTimingSimpleCPU()
+system.cpu = (
+    create_cpu(
+        load_parameters(
+            str(
+                Path(__file__).resolve().parents[3]
+                / "configs/zena_cmn/profiles/a720ae_documented.yaml"
+            )
+        ),
+        0,
+    )
+    if args.o3
+    else ArmTimingSimpleCPU()
+)
 system.cpu.createThreads()
 system.cpu.createInterruptController()
 system.cpu.icache_port = system.bus.cpu_side_ports
@@ -55,9 +76,13 @@ system.cpu.dcache_port = system.bus.cpu_side_ports
 root = Root(full_system=True, system=system)
 out = Path(m5.options.outdir)
 source = (
-    Path(__file__).with_name("stlur.S")
-    if args.stlur
-    else Path(__file__).with_suffix(".S")
+    Path(__file__).with_name("sve_el0.S")
+    if args.sve_el0
+    else (
+        Path(__file__).with_name("stlur.S")
+        if args.stlur
+        else Path(__file__).with_suffix(".S")
+    )
 )
 subprocess.run(
     ["aarch64-linux-gnu-as", str(source), "-o", str(out / "features.o")],
@@ -77,6 +102,29 @@ m5.instantiate()
 proxy = system.getCCObject().physProxy
 proxy.write(ram, (out / "features.bin").read_bytes())
 m5.simulate(100000000)
+if args.sve_el0:
+    words = struct.unpack("<6Q", proxy.read(ram + 0x1000, 48))
+    assert words == (
+        16,
+        0x0808080808080808,
+        0x0808080808080808,
+        0x0C0C0C0C0C0C0C0C,
+        0x0C0C0C0C0C0C0C0C,
+        0xCAFE,
+    ), [hex(word) for word in words]
+    result = {
+        "status": "PASS",
+        "exception_level": 0,
+        "sve_vl_bits": 128,
+        "sve_add": "PASS",
+        "sve2_eor3": "PASS",
+        "cpu": "ArmO3CPU" if args.o3 else "ArmTimingSimpleCPU",
+    }
+    (out / "sve-el0-result.json").write_text(
+        json.dumps(result, indent=2) + "\n"
+    )
+    print(json.dumps(result))
+    raise SystemExit(0)
 words = struct.unpack("<9Q", proxy.read(ram + 0x1000, 72))
 if args.stlur:
     expected = (
