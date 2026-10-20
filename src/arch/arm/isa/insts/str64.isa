@@ -329,6 +329,11 @@ let {{
     StoreRaw64("stlrh", "STLRH64", size=2, flavor="release").emit()
     StoreRaw64("stlrb", "STLRB64", size=1, flavor="release").emit()
 
+    StoreImm64("stlurb", "STLURB64_IMM", size=1, flavor="release").emit()
+    StoreImm64("stlurh", "STLURH64_IMM", size=2, flavor="release").emit()
+    StoreImm64("stlur", "STLURW64_IMM", size=4, flavor="release").emit()
+    StoreImm64("stlur", "STLURX64_IMM", size=8, flavor="release").emit()
+
     StoreEx64("stlxr", "STLXRX64", size=8, flavor="relex").emit()
     StoreEx64("stlxr", "STLXRW64", size=4, flavor="relex").emit()
     StoreEx64("stlxrh", "STLXRH64", size=2, flavor="relex").emit()
