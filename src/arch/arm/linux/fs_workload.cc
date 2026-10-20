@@ -84,9 +84,10 @@ FsLinux::initState()
     }
 
     // Setup boot data structure
-    // Check if the kernel image has a symbol that tells us it supports
-    // device trees.
+    // AArch64 Linux requires a DTB, including symbol-free Image wrappers.
+    // Retain symbol-based detection for the older AArch32 ATAGS protocol.
     bool kernel_has_fdt_support =
+        getArch() == loader::Arm64 ||
         kernelSymtab.find("unflatten_device_tree") != kernelSymtab.end();
     bool dtb_file_specified = params().dtb_filename != "";
 
@@ -207,6 +208,14 @@ void
 FsLinux::startup()
 {
     FsWorkload::startup();
+
+    if (kernelSymtab.empty()) {
+        panic_if(enableContextSwitchStatsDump,
+                 "Context switch statistics require kernel symbols");
+        warn("No kernel symbols: delay acceleration and panic/oops "
+             "event hooks are unavailable");
+        return;
+    }
 
     if (enableContextSwitchStatsDump) {
         if (getArch() == loader::Arm64)
