@@ -1,0 +1,5 @@
+# Copyright (c) 2026 Chanho Park
+# SPDX-License-Identifier: BSD-3-Clause
+Import('*')
+SimObject('ChiDmaTest.py', sim_objects=['ChiDmaTest'])
+Source('chi_dma_test.cc')

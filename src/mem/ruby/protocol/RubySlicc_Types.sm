@@ -138,6 +138,7 @@ structure (Sequencer, external = "yes") {
   void writeCallback(Addr, DataBlock, bool, MachineType,
                      Cycles, Cycles, Cycles);
   void writeUniqueCallback(Addr, DataBlock);
+  void getWriteData(Addr, DataBlock);
 
   void atomicCallback(Addr, DataBlock);
   void atomicCallback(Addr, DataBlock, bool);
@@ -192,6 +193,8 @@ structure(RubyRequest, desc="...", interface="Message", external="yes") {
   bool isSecure,             default="false",desc="If flag is set, request is in secure PA space";
 
   RequestPtr getRequestPtr();
+  bool isUncacheable();
+  bool isCacheClean();
 }
 
 structure(AbstractCacheEntry, primitive="yes", external = "yes") {

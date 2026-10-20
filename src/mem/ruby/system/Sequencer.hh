@@ -111,6 +111,8 @@ class Sequencer : public RubyPort
                        const bool noCoales = false);
 
     // Write callback that prevents coalescing
+    void getWriteData(Addr address, DataBlock &data);
+
     void writeUniqueCallback(Addr address, DataBlock& data)
     {
         writeCallback(address, data, true, MachineType_NUM, Cycles(0),

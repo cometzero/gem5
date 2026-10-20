@@ -243,6 +243,16 @@ class RubyRequest : public Message
     const int& getSize() const { return m_Size; }
     const PrefetchBit& getPrefetch() const { return m_Prefetch; }
     RequestPtr getRequestPtr() const { return m_pkt->req; }
+    bool
+    isUncacheable() const
+    {
+        return m_pkt && m_pkt->req->isUncacheable();
+    }
+    bool
+    isCacheClean() const
+    {
+        return m_pkt && m_pkt->req->isCacheClean();
+    }
 
     void setWriteMask(uint32_t offset, uint32_t len,
         std::vector< std::pair<int,AtomicOpFunctor*>> atomicOps);
