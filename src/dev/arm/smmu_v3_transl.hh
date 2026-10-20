@@ -229,7 +229,7 @@ class SMMUTranslationProcess : public SMMUProcess
     void sendEvent(Yield &yield, const SMMUEvent &ev);
     void sendEventInterrupt(Yield &yield);
 
-    void doReadSTE(Yield &yield, StreamTableEntry &ste, uint32_t sid);
+    Fault doReadSTE(Yield &yield, StreamTableEntry &ste, uint32_t sid);
     TranslResult doReadCD(Yield &yield, ContextDescriptor &cd,
                           const StreamTableEntry &ste, uint32_t sid, uint32_t ssid);
     void doReadConfig(Yield &yield, Addr addr, void *ptr, size_t size,
