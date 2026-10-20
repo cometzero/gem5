@@ -90,6 +90,10 @@ RegClass floatRegClass(FloatRegClass, FloatRegClassName, 0, debug::FloatRegs);
 ISA::ISA(const Params &p) : BaseISA(p, "arm"), system(NULL),
     _decoderFlavor(p.decoderFlavor), pmu(p.pmu), impdefAsNop(p.impdef_nop)
 {
+    fatal_if(p.cache_id_registers_enabled && p.ccsidr.size() != 14,
+             "Explicit cache ID registers require 14 CCSIDR entries");
+    fatal_if(p.cache_id_registers_enabled && bits(p.id_aa64mmfr2_el1, 23, 20),
+             "Explicit 32-bit CCSIDR geometry does not support FEAT_CCIDX");
     _regClasses.push_back(&flatIntRegClass);
     _regClasses.push_back(&floatRegClass);
     _regClasses.push_back(&vecRegClass);
@@ -522,12 +526,34 @@ ISA::readMiscReg(RegIndex idx)
         }
         break;
 
+      case MISCREG_CLIDR_EL1:
+          if (params().cache_id_registers_enabled) {
+              return params().clidr;
+          }
+          break;
       case MISCREG_CLIDR:
+          if (params().cache_id_registers_enabled) {
+              return params().clidr;
+          }
         warn_once("The clidr register always reports 0 caches.\n");
         warn_once("clidr LoUIS field of 0b001 to match current "
                   "ARM implementations.\n");
         return 0x00200000;
+      case MISCREG_CCSIDR_EL1:
       case MISCREG_CCSIDR:
+          if (params().cache_id_registers_enabled) {
+              const auto selector =
+                  readMiscRegNoEffect(idx == MISCREG_CCSIDR_EL1
+                                          ? MISCREG_CSSELR_EL1
+                                          : MISCREG_CSSELR) &
+                  0xf;
+              return selector < params().ccsidr.size()
+                         ? params().ccsidr[selector]
+                         : 0;
+          }
+          if (idx == MISCREG_CCSIDR_EL1) {
+              break;
+          }
         warn_once("The ccsidr register isn't implemented and "
                 "always reads as 0.\n");
         break;
@@ -919,16 +945,24 @@ ISA::setMiscReg(RegIndex idx, RegVal val)
                         miscRegName[idx], newVal);
             }
             break;
-          case MISCREG_CSSELR:
-            warn_once("The csselr register isn't implemented.\n");
-            return;
+            case MISCREG_CSSELR_EL1:
+                if (params().cache_id_registers_enabled) {
+                    newVal &= 0xf;
+                }
+                break;
+            case MISCREG_CSSELR:
+                if (params().cache_id_registers_enabled) {
+                    newVal &= 0xf;
+                    break;
+                }
+                warn_once("The csselr register isn't implemented.\n");
+                return;
 
-          case MISCREG_DC_ZVA_Xt:
-            warn("Calling DC ZVA! Not Implemeted! Expect WEIRD results\n");
-            return;
+            case MISCREG_DC_ZVA_Xt:
+                warn("Calling DC ZVA! Not Implemeted! Expect WEIRD results\n");
+                return;
 
-          case MISCREG_FPCR:
-            {
+            case MISCREG_FPCR: {
                 FPCR fpcr_val = (FPCR)newVal;
                 if (!release->has(ArmExtension::FEAT_AFP)) {
                     fpcr_val.nep = 0;
@@ -939,8 +973,7 @@ ISA::setMiscReg(RegIndex idx, RegVal val)
                     fpcr_val.ebf = 0;
                 }
                 setMiscRegNoEffect(MISCREG_FPCR, fpcr_val);
-            }
-            break;
+            } break;
           case MISCREG_FPSCR:
             tc->getDecoderPtr()->as<Decoder>().setContext(newVal);
             {
