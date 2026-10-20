@@ -1,5 +1,14 @@
 # Zena AP Ruby CHI 실행
 
+Apollo workspace의 `apollo-qvp` branch는 root `run_gem5_linux.sh`를 통해
+Yocto native build와 배포된 raw arm64 `Image`/initramfs/WIC를 사용한다.
+`configs/zena_cmn/run_fs.py --kernel`은 ELF64와 raw Image 모두 받는다.
+raw Image는 payload를 보존한 ELF wrapper로 로딩하며 원본 SHA를 manifest에
+기록한다. 이 경우 kernel symbol 기반 delay/panic hook은 사용할 수 없다.
+Linux cache-ID register는 모든 AP profile에 캐시 geometry를 제공한다.
+아래 `/srv/oss_contrib` 실행 예와 외부 helper 의존성은 참조 workspace용이며,
+Apollo 실행 계약은 상위 workspace `doc/apollo-gem5.md`를 따른다.
+
 처음 실행할 때는 [빠른 실행 가이드](quick_start.md)의 준비 검사·짧은 회귀·결과 판정을 따른다.
 
 이 모델은 현재 프로젝트의 Classic 경로와 독립적인 **보정되지 않은 topology proxy**이다. 실제 Cortex-A720AE/DSU/CMN silicon의 성능 모델로 해석하지 않는다.

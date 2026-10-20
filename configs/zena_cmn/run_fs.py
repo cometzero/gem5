@@ -33,6 +33,7 @@ from zena_cmn.cpu_profile import (
     create_cpu,
 )
 from zena_cmn.device_tree import add_cache_topology
+from zena_cmn.kernel_image import prepare_kernel
 from zena_cmn.npu_v01 import (
     add_npu_dtb,
     create_npu,
@@ -110,6 +111,13 @@ def main():
         )
     args.cpus = params["cpu"]["cores"]
     args.warm_reset = False
+    original_kernel = args.kernel
+    args.kernel = prepare_kernel(
+        args.kernel,
+        Path(m5.options.outdir) / "kernel-image.elf",
+        ZenaCSS._RAM_BASE,
+        ZenaCSS._INITRD_BASE,
+    )
     validate_images(args)
     atomic = args.boot_mode == "atomic"
     system = ArmSystem(
@@ -156,12 +164,11 @@ def main():
     for cpu in system.cpu:
         cpu.clk_domain = system.cpu_clk_domain
         cpu.createThreads()
-        if params["npu"]["enabled"]:
-            clidr, ccsidr = cache_id_registers(params)
-            for isa in cpu.isa:
-                isa.cache_id_registers_enabled = True
-                isa.clidr = clidr
-                isa.ccsidr = ccsidr
+        clidr, ccsidr = cache_id_registers(params)
+        for isa in cpu.isa:
+            isa.cache_id_registers_enabled = True
+            isa.clidr = clidr
+            isa.ccsidr = ccsidr
         cpu.createInterruptController()
     if atomic:
         system.roi_cpu = [
@@ -233,6 +240,11 @@ def main():
                 "sha256": file_digest(getattr(args, name)),
             }
             for name in ("kernel", "bootloader", "initrd", "disk_image")
+        },
+        "original_kernel": {
+            "path": original_kernel,
+            "sha256": file_digest(original_kernel),
+            "wrapped_image": original_kernel != args.kernel,
         },
         "memory_fingerprint": ruby._memory_backend["fingerprint"],
         "memory_part_provenance": ruby._memory_backend["part_provenance"],
