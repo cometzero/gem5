@@ -7573,8 +7573,10 @@ ISA::initializeMiscRegMetadata()
 
     // SME
     InitReg(MISCREG_ID_AA64SMFR0_EL1)
-        .reset([](){
+        .reset([release=release](){
             AA64SMFR0 smfr0_el1 = 0;
+            if (!release->has(ArmExtension::FEAT_SME))
+                return smfr0_el1;
             smfr0_el1.f32f32 = 0x1;
             // The following BF16F32 is actually not implemented due to a
             // lack of BF16 support in gem5's fplib. However, as per the
