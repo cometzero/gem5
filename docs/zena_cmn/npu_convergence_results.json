@@ -1,0 +1,54 @@
+[
+    {
+        "passes": 1,
+        "host_s": 455.8135811050015,
+        "roi_us": 1512.2595,
+        "participant_GBs": 5.777819410082487,
+        "payload_GBs": 11.552042392977837,
+        "payload_us": 726.158,
+        "outside_payload_us": 725.706,
+        "dram_read_bytes": 4560896,
+        "dram_write_bytes": 4177024,
+        "summary_sha256":
+            "48299ca6686dc4122da1afee97b0c482884e9723a5a25e6f36622f4467c84fcd"
+    },
+    {
+        "passes": 2,
+        "host_s": 461.768803758001,
+        "roi_us": 2124.5785,
+        "participant_GBs": 8.12550417481935,
+        "payload_GBs": 12.62551680646341,
+        "payload_us": 1328.834,
+        "outside_payload_us": 735.926,
+        "dram_read_bytes": 8754560,
+        "dram_write_bytes": 8372672,
+        "summary_sha256":
+            "7ec21c5398bbaa76ccd9a8e82938e5de61184a5a8ede0c89b3eca6e42a7caaa6"
+    },
+    {
+        "passes": 4,
+        "host_s": 434.8088721719978,
+        "roi_us": 3342.8224999999998,
+        "participant_GBs": 10.227191042468784,
+        "payload_GBs": 13.245825846120807,
+        "payload_us": 2533.208,
+        "outside_payload_us": 747.6959999999999,
+        "dram_read_bytes": 17154368,
+        "dram_write_bytes": 16766656,
+        "summary_sha256":
+            "300a9f6b56877160473c86e9358ce9564ed0b4515dea3f8b28e3ad8bd8fef6bb"
+    },
+    {
+        "passes": 8,
+        "host_s": 450.1439464390023,
+        "roi_us": 5742.2955,
+        "participant_GBs": 11.81267813489247,
+        "payload_GBs": 13.570799174049911,
+        "payload_us": 4945.093,
+        "outside_payload_us": 735.9949999999997,
+        "dram_read_bytes": 33996096,
+        "dram_write_bytes": 33545920,
+        "summary_sha256":
+            "8eb2bf44b1e0cde6567dd2ddbd180e0e4be613b41e3d73c348909923df26414c"
+    }
+]

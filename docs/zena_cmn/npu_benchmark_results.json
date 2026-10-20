@@ -1,0 +1,70 @@
+[
+    {
+        "run": "cpu-delay200",
+        "label": "CPU only",
+        "roi_us": 536.125,
+        "host_s": 247.91598649099979,
+        "cpu_GBs": 7.632890752387608,
+        "npu_GBs": 0.0,
+        "npu_payload_GBs": 0,
+        "dram_read_GBs": 2.3380816041035204,
+        "dram_write_GBs": 0.0,
+        "dram_read_bytes": 1253504,
+        "dram_write_bytes": 0,
+        "overlap_us_min": 0.0,
+        "overlap_us_max": 0.0,
+        "summary_sha256":
+            "161498690d99236723f21946498c3b1cd9d0be6f4e66f1609f6bc18d760fe070"
+    },
+    {
+        "run": "npu-production",
+        "label": "NPU only",
+        "roi_us": 548.9019999999999,
+        "host_s": 296.24337186199773,
+        "cpu_GBs": 0.0,
+        "npu_GBs": 4.292797956309567,
+        "npu_payload_GBs": 11.549274987195938,
+        "dram_read_GBs": 2.5330569026893692,
+        "dram_write_GBs": 1.8823323653402613,
+        "dram_read_bytes": 1390400,
+        "dram_write_bytes": 1033216,
+        "overlap_us_min": 0.0,
+        "overlap_us_max": 0.0,
+        "summary_sha256":
+            "f492caa3cf8495d2792a2164da81d854de9b5894250a1e5f9c69132ad6223156"
+    },
+    {
+        "run": "concurrent-delay200",
+        "label": "CPU + NPU",
+        "roi_us": 607.1524999999999,
+        "host_s": 320.3239446059997,
+        "cpu_GBs": 7.158101687510239,
+        "npu_GBs": 4.105301072742932,
+        "npu_payload_GBs": 11.408167372938982,
+        "dram_read_GBs": 4.04574468523147,
+        "dram_write_GBs": 1.7041649338510507,
+        "dram_read_bytes": 2456384,
+        "dram_write_bytes": 1034688,
+        "overlap_us_min": 144.328,
+        "overlap_us_max": 148.648,
+        "summary_sha256":
+            "488b076f9ca940af2051a76906c7186bc912f45e807110c66ec09b21461fe728"
+    },
+    {
+        "run": "async-delay200",
+        "label": "CPU + async NPU",
+        "roi_us": 597.4354999999999,
+        "host_s": 319.8273156639989,
+        "cpu_GBs": 7.143666884674078,
+        "npu_GBs": 4.243254180223053,
+        "npu_payload_GBs": 12.598382814095709,
+        "dram_read_GBs": 4.111653894018685,
+        "dram_write_GBs": 1.7281329951099325,
+        "dram_read_bytes": 2456448,
+        "dram_write_bytes": 1032448,
+        "overlap_us_min": 143.4035,
+        "overlap_us_max": 145.5635,
+        "summary_sha256":
+            "eb496357c6b98c958580849061a4ff00502cba8ced0493d4a2d47f1058cc7072"
+    }
+]
