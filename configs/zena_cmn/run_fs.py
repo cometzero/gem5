@@ -13,7 +13,6 @@ from m5.objects import (
     ArmSemihosting,
     ArmSPI,
     ArmSystem,
-    Armv8,
     CowDiskImage,
     IOXBar,
     RawDiskImage,
@@ -29,6 +28,7 @@ CONFIGS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CONFIGS))
 sys.path.insert(0, str(CONFIGS / "example" / "arm"))
 from zena_cmn.cpu_profile import (
+    ap_release,
     cache_id_registers,
     create_cpu,
 )
@@ -124,7 +124,7 @@ def main():
         mem_mode="atomic_noncaching" if atomic else "timing",
         mem_ranges=[AddrRange(ZenaCSS._RAM_BASE, size=ZenaCSS._RAM_SIZE)],
         cpu_affinities=[ZenaCSS.affinity(i) for i in range(args.cpus)],
-        release=Armv8(),
+        release=ap_release(),
         highest_el_is_64=True,
         phys_addr_range_64=48,
         auto_reset_addr=False,

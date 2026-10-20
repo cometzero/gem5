@@ -6,6 +6,13 @@ Yocto native build와 배포된 raw arm64 `Image`/initramfs/WIC를 사용한다.
 raw Image는 payload를 보존한 ELF wrapper로 로딩하며 원본 SHA를 manifest에
 기록한다. 이 경우 kernel symbol 기반 delay/panic hook은 사용할 수 없다.
 Linux cache-ID register는 모든 AP profile에 캐시 geometry를 제공한다.
+AP ISA release는 `FEAT_PMULL`을 제외한다. 현재 Advanced SIMD decoder
+(`isa/formats/neon64.isa`)는 8-bit polynomial PMULL만 구현하고 64-bit
+PMULL/PMULL2를 거절하므로, `ID_AA64ISAR0_EL1.AES=1`로 AES만 광고한다.
+AES/SHA1/SHA256/CRC32는 유지하며 Linux GPT 검사는 지원되는 CRC 경로를 쓴다.
+SVE PMULL 구현은 별도 ISA이며 NEON의 누락된 64-bit 명령을 대체하지 않는다.
+`tests/zena_cmn/directed/ap_features.py`는 실제 ID register와
+AES/SHA1/SHA256/CRC32 명령을 짧게 검증한다.
 아래 `/srv/oss_contrib` 실행 예와 외부 helper 의존성은 참조 workspace용이며,
 Apollo 실행 계약은 상위 workspace `doc/apollo-gem5.md`를 따른다.
 
