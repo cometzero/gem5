@@ -12,6 +12,9 @@ def ap_release():
     release = Armv8()
     # The NEON decoder implements byte PMULL only, not FEAT_PMULL's 64-bit form.
     release.remove(ArmExtension("FEAT_PMULL"))
+    # Cortex-A720-tuned Yocto userspace contains unconditional SVE/SVE2.
+    for extension in ("FEAT_SVE", "FEAT_SVE2"):
+        release.add(ArmExtension(extension))
     return release
 
 

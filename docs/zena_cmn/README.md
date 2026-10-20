@@ -19,6 +19,13 @@ LDAPUR word/doubleword decode 폭도 일치시켰다.
 위 회귀를 `--stlur`로 실행하면 폭별 인접 byte 보존, 음수 offset, SP/ZR,
 LDAPUR zero extension을 검증한다. 이 검사는 multicore weak-order litmus를
 대신하지 않으며 release semantics는 기존 STLR 경로에서 상속한다.
+Yocto의 `-mcpu=cortex-a720` userspace에는 IFUNC 선택 밖의 SVE 코드도
+존재하므로 AP release는 구현된 SVE/SVE2를 128-bit VL로 활성화한다.
+이는 Cortex-A720 전체 ISA 지원 선언이 아니다. EL3 monitor의 CPTR.EZ는
+SVE를 허용하고 Linux EL2 초기화가 CPTR.TZ를 해제한 뒤 EL1 CPACR.ZEN을
+관리한다. `--sve-el0` 회귀는 이 EL 전환과 실제 EL0 SVE/SVE2 명령을
+검사한다. `--o3`를 추가하면 documented profile의 custom FU pool에서
+검사하며, predicate/integer SIMD/load-store의 기존 native mapping을 유지한다.
 아래 `/srv/oss_contrib` 실행 예와 외부 helper 의존성은 참조 workspace용이며,
 Apollo 실행 계약은 상위 workspace `doc/apollo-gem5.md`를 따른다.
 
