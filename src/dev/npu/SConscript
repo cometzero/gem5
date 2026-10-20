@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: BSD-3-Clause
+Import('*')
+
+if env['CONF']['USE_ARM_ISA']:
+    SimObject('NpuV01.py', sim_objects=['NpuV01'])
+    Source('npu_v01.cc')
