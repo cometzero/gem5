@@ -7596,6 +7596,8 @@ ISA::initializeMiscRegMetadata()
     InitReg(MISCREG_ID_AA64SMFR0_EL1)
         .reset([this](){
             AA64SMFR0 smfr0_el1 = 0;
+            if (!release->has(ArmExtension::FEAT_SME))
+                return smfr0_el1;
             smfr0_el1.fa64 = 0;
             smfr0_el1.lutv2 = 0;
             smfr0_el1.smeVer = release->has(ArmExtension::FEAT_SME2p1) ? 0x2 :
