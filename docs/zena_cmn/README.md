@@ -26,6 +26,15 @@ SVE를 허용하고 Linux EL2 초기화가 CPTR.TZ를 해제한 뒤 EL1 CPACR.ZE
 관리한다. `--sve-el0` 회귀는 이 EL 전환과 실제 EL0 SVE/SVE2 명령을
 검사한다. `--o3`를 추가하면 documented profile의 custom FU pool에서
 검사하며, predicate/integer SIMD/load-store의 기존 native mapping을 유지한다.
+AP 부팅 플랫폼은 `0x30030000`, INTID 290에 기존 `MmioVirtIO`와
+`VirtIORng`를 연결하고 `virtio,mmio` DT 노드를 생성한다. Linux의
+`CONFIG_HW_RANDOM_VIRTIO` 드라이버가 정상 virtqueue/IRQ 경로로 entropy를
+받는다. descriptor/data 접근은 system port의 Ruby functional 경로를
+통하므로 캐시/버퍼를 조회하지만 timed DMA traffic은 모델링하지 않는다.
+이 장치의 gem5 PRNG 출력은 시뮬레이션 기능 검증용이며 production 보안
+난수가 아니다. 동일 simulator seed와 동일 실행 순서에서는 재현 가능한
+출력을 만들며 실제 하드웨어 entropy 품질이나 처리량을 나타내지 않는다.
+
 아래 `/srv/oss_contrib` 실행 예와 외부 helper 의존성은 참조 workspace용이며,
 Apollo 실행 계약은 상위 workspace `doc/apollo-gem5.md`를 따른다.
 

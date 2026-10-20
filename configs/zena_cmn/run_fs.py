@@ -15,11 +15,13 @@ from m5.objects import (
     ArmSystem,
     CowDiskImage,
     IOXBar,
+    MmioVirtIO,
     RawDiskImage,
     Root,
     RubyPortProxy,
     SrcClockDomain,
     TimingVirtIOBlock,
+    VirtIORng,
     VoltageDomain,
     ZenaCSS,
 )
@@ -180,7 +182,16 @@ def main():
             new.workload = old.workload
             new.isa = old.isa
             new.createThreads()
-    devices, dma_ports = [], []
+    # Functional entropy device: descriptor/data accesses use the Ruby-aware
+    # system port, but do not model timed DMA traffic.
+    system.platform.rng = MmioVirtIO(
+        pio_addr=0x30030000,
+        pio_size=0x200,
+        interrupt=ArmSPI(num=290),
+        vio=VirtIORng(),
+    )
+    system.platform.rng.pio = system.iobus.mem_side_ports
+    devices, dma_ports = [(0x30030000, 290)], []
     if args.disk_image:
         system.platform.block = TimingVirtIOBlock(
             pio_addr=0x30020000,
