@@ -75,11 +75,16 @@ SMMUCommandExecProcess::main(Yield &yield)
                 (smmu.regs.cmdq_base & Q_BASE_ADDR_MASK) +
                 (smmu.regs.cmdq_cons & size_mask) * sizeof(SMMUCommand);
 
-            // This deliberately resets the error field in cmdq_cons!
-            smmu.regs.cmdq_cons = (smmu.regs.cmdq_cons + 1) & size_mask_wrap;
-
             doRead(yield, cmd_addr, &cmd, sizeof(SMMUCommand));
+            // Serialize maintenance against old walks and their TLB fills.
+            smmu.commandBarrier = true;
+            while (smmu.transactionsPending()) {
+                doDelay(yield, Cycles(1));
+            }
             smmu.processCommand(cmd);
+            smmu.regs.cmdq_cons = (smmu.regs.cmdq_cons + 1) & size_mask_wrap;
+            smmu.commandBarrier = false;
+            smmu.scheduleDeviceRetries();
         }
 
         busy = false;

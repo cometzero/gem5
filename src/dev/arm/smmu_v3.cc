@@ -137,15 +137,60 @@ SMMUv3::recvTimingResp(PacketPtr pkt)
     DPRINTF(SMMUv3, "[t] requestor resp addr=%#x size=%#x\n",
         pkt->getAddr(), pkt->getSize());
 
-    // @todo: We need to pay for this and not just zero it out
-    pkt->headerDelay = pkt->payloadDelay = 0;
-
     SMMUProcess *proc =
         safe_cast<SMMUProcess *>(pkt->popSenderState());
 
-    runProcessTiming(proc, pkt);
+    scheduleProcessTiming(proc, pkt);
 
     return true;
+}
+
+void
+SMMUv3::scheduleProcessTiming(SMMUProcess *proc, PacketPtr pkt)
+{
+    const Tick delay = pkt->headerDelay + pkt->payloadDelay;
+    pkt->headerDelay = pkt->payloadDelay = 0;
+    if (delay) {
+        schedule(new EventFunctionWrapper(
+                     [this, proc, pkt] { runProcessTiming(proc, pkt); },
+                     name(), true),
+                 curTick() + delay);
+    } else {
+        runProcessTiming(proc, pkt);
+    }
+}
+
+bool
+SMMUv3::transactionsPending() const
+{
+    for (const auto *ifc : deviceInterfaces) {
+        if (ifc->pendingMemAccesses) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+SMMUv3::eventqInterruptActive() const
+{
+    return eventqInterrupt && eventqInterrupt->active();
+}
+
+void
+SMMUv3::updateEventqInterrupt()
+{
+    if (!eventqInterrupt) {
+        return;
+    }
+    const uint32_t wrap_mask = mask((regs.eventq_base & Q_BASE_SIZE_MASK) + 1);
+    const IRQCtrl ctrl = regs.irq_ctrl;
+    if ((regs.cr0 & CR0_EVENTQEN_MASK) && ctrl.eventqIrqEn &&
+        ((regs.eventq_prod ^ regs.eventq_cons) & wrap_mask)) {
+        eventqInterrupt->raise();
+    } else {
+        eventqInterrupt->clear();
+    }
 }
 
 void
@@ -183,13 +228,10 @@ SMMUv3::tableWalkRecvTimingResp(PacketPtr pkt)
     DPRINTF(SMMUv3, "[t] requestor HWTW resp addr=%#x size=%#x\n",
         pkt->getAddr(), pkt->getSize());
 
-    // @todo: We need to pay for this and not just zero it out
-    pkt->headerDelay = pkt->payloadDelay = 0;
-
     SMMUProcess *proc =
         safe_cast<SMMUProcess *>(pkt->popSenderState());
 
-    runProcessTiming(proc, pkt);
+    scheduleProcessTiming(proc, pkt);
 
     return true;
 }
@@ -558,6 +600,10 @@ SMMUv3::processCommand(const SMMUCommand &cmd)
             break;
         }
 
+        case CMD_SYNC:
+            // The command executor has already waited for preceding traffic.
+            break;
+
         case CMD_RESUME:
             DPRINTF(SMMUv3, "CMD_RESUME\n");
             panic("resume unimplemented");
@@ -650,7 +696,9 @@ SMMUv3::writeControl(PacketPtr pkt)
             assert(pkt->getSize() == sizeof(uint32_t));
             *reinterpret_cast<uint32_t *>(regs.data + offset) =
                 pkt->getLE<uint32_t>();
-            schedule(processCommandsEvent, nextCycle());
+            if (!processCommandsEvent.scheduled()) {
+                schedule(processCommandsEvent, nextCycle());
+            }
             break;
 
         case offsetof(SMMURegs, strtab_base):
@@ -698,6 +746,7 @@ SMMUv3::writeControl(PacketPtr pkt)
             }
     }
 
+    updateEventqInterrupt();
     pkt->makeAtomicResponse();
 
     return 0;
@@ -770,8 +819,8 @@ SMMUv3::SMMUv3Stats::SMMUv3Stats(statistics::Group *parent)
 DrainState
 SMMUv3::drain()
 {
-    // Wait until the Command Executor is not busy
-    if (commandExecutor.isBusy()) {
+    // Include a command doorbell whose executor has not started yet.
+    if (commandExecutor.isBusy() || processCommandsEvent.scheduled()) {
         return DrainState::Draining;
     }
     return DrainState::Drained;

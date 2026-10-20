@@ -88,6 +88,7 @@ class SMMUv3(ClockedObject):
     type = "SMMUv3"
     cxx_header = "dev/arm/smmu_v3.hh"
     cxx_class = "gem5::SMMUv3"
+    cxx_exports = [PyBindMethod("eventqInterruptActive")]
 
     request = RequestPort("Request port")
     walker = RequestPort(

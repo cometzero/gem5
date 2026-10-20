@@ -147,15 +147,11 @@ SMMUv3DeviceInterface::recvTimingReq(PacketPtr pkt)
     DPRINTF(SMMUv3, "[t] req from %s addr=%#x size=%#x\n",
             devicePort->getPeer(), pkt->getAddr(), pkt->getSize());
 
-    // @todo: We need to pay for this and not just zero it out
-    pkt->headerDelay = pkt->payloadDelay = 0;
-
     unsigned nbeats =
         (pkt->getSize() + (portWidth-1)) / portWidth;
 
-    if (xlateSlotsRemaining==0 ||
-        (pkt->isWrite() && wrBufSlotsRemaining < nbeats))
-    {
+    if (smmu->commandBarrier || xlateSlotsRemaining == 0 ||
+        (pkt->isWrite() && wrBufSlotsRemaining < nbeats)) {
         deviceNeedsRetry = true;
         return false;
     }
@@ -168,7 +164,7 @@ SMMUv3DeviceInterface::recvTimingReq(PacketPtr pkt)
         new SMMUTranslationProcess(proc_name, *smmu, *this);
     proc->beginTransaction(SMMUTranslRequest::fromPacket(pkt));
 
-    smmu->runProcessTiming(proc, pkt);
+    smmu->scheduleProcessTiming(proc, pkt);
 
     return true;
 }
@@ -197,10 +193,7 @@ SMMUv3DeviceInterface::atsRecvTimingReq(PacketPtr pkt)
     DPRINTF(SMMUv3, "[t] ATS responder  req  addr=%#x size=%#x\n",
             pkt->getAddr(), pkt->getSize());
 
-    // @todo: We need to pay for this and not just zero it out
-    pkt->headerDelay = pkt->payloadDelay = 0;
-
-    if (xlateSlotsRemaining == 0) {
+    if (smmu->commandBarrier || xlateSlotsRemaining == 0) {
         deviceNeedsRetry = true;
         return false;
     }
@@ -211,7 +204,7 @@ SMMUv3DeviceInterface::atsRecvTimingReq(PacketPtr pkt)
         new SMMUTranslationProcess(proc_name, *smmu, *this);
     proc->beginTransaction(SMMUTranslRequest::fromPacket(pkt, ats_request));
 
-    smmu->runProcessTiming(proc, pkt);
+    smmu->scheduleProcessTiming(proc, pkt);
 
     return true;
 }
@@ -222,13 +215,10 @@ SMMUv3DeviceInterface::atsRecvTimingResp(PacketPtr pkt)
     DPRINTF(SMMUv3, "[t] ATS requestor resp addr=%#x size=%#x\n",
             pkt->getAddr(), pkt->getSize());
 
-    // @todo: We need to pay for this and not just zero it out
-    pkt->headerDelay = pkt->payloadDelay = 0;
-
     SMMUProcess *proc =
         safe_cast<SMMUProcess *>(pkt->popSenderState());
 
-    smmu->runProcessTiming(proc, pkt);
+    smmu->scheduleProcessTiming(proc, pkt);
 
     return true;
 }
@@ -259,8 +249,8 @@ SMMUv3DeviceInterface::scheduleDeviceRetry()
 DrainState
 SMMUv3DeviceInterface::drain()
 {
-    // Wait until all SMMU translations are completed
-    if (xlateSlotsRemaining < params().xlate_slots) {
+    // Translation slots are released before downstream memory responds.
+    if (pendingMemAccesses) {
         return DrainState::Draining;
     }
     return DrainState::Drained;

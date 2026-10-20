@@ -78,6 +78,15 @@
 namespace gem5
 {
 
+// Optional caller-owned fault metadata, preserved through packet routing.
+struct SMMUv3Fault : public Packet::SenderState
+{
+    uint8_t type = 0;
+    Addr iova = 0;
+    uint32_t sid = 0;
+    bool write = false;
+};
+
 class ArmInterruptPin;
 class SMMUTranslationProcess;
 class System;
@@ -127,6 +136,8 @@ class SMMUv3 : public ClockedObject
     SMMUSemaphore ipaSem;
     SMMUSemaphore walkSem;
     SMMUSemaphore requestPortSem;
+    SMMUSemaphore eventqSem{1};
+    bool commandBarrier = false;
 
     SMMUSemaphore transSem; // max N transactions in SMMU
     SMMUSemaphore ptwSem; // max N concurrent PTWs
@@ -171,6 +182,10 @@ class SMMUv3 : public ClockedObject
     SMMUAction runProcessAtomic(SMMUProcess *proc, PacketPtr pkt);
     SMMUAction runProcessTiming(SMMUProcess *proc, PacketPtr pkt);
 
+    void scheduleProcessTiming(SMMUProcess *proc, PacketPtr pkt);
+    bool transactionsPending() const;
+    void updateEventqInterrupt();
+
     void processCommands();
     MemberEventWrapper<&SMMUv3::processCommands> processCommandsEvent;
 
@@ -190,6 +205,7 @@ class SMMUv3 : public ClockedObject
     bool tableWalkRecvTimingResp(PacketPtr pkt);
     void tableWalkRecvReqRetry();
 
+    bool eventqInterruptActive() const;
     Tick readControl(PacketPtr pkt);
     Tick writeControl(PacketPtr pkt);
 

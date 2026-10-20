@@ -149,10 +149,12 @@ SMMUTranslationProcess::main(Yield &yield)
 
     const Addr next4k = (request.addr + 0x1000ULL) & ~0xfffULL;
 
-    if ((request.addr + request.size) > next4k)
-        panic("Transaction crosses 4k boundary (addr=%#x size=%#x)!\n",
-                request.addr, request.size);
-
+    if (request.size > 0x1000 - (request.addr & 0xfff)) {
+        TranslResult tr;
+        tr.fault = Fault(FAULT_UUT);
+        abortTransaction(yield, tr);
+        return;
+    }
 
     unsigned numResponderBeats = request.isWrite ?
         (request.size + (ifc.portWidth - 1)) / ifc.portWidth : 1;
@@ -230,6 +232,9 @@ SMMUTranslationProcess::main(Yield &yield)
         hazardIdHold(yield);
         hazardIdRelease();
 
+        if (!tr.isFaulting() && request.isWrite && !tr.writable) {
+            tr.fault = Fault(FAULT_PERMISSION, FaultClass::IN);
+        }
         if (tr.isFaulting()) {
             abortTransaction(yield, tr);
         } else {
@@ -271,6 +276,12 @@ SMMUTranslationProcess::smmuTranslation(Yield &yield)
         } else {
             haveConfig = false;
         }
+    }
+
+    if (haveConfig && context.stage1Enable &&
+        (request.addr >> (64 - context.t0sz))) {
+        tr.fault = Fault(FAULT_ADDR_SIZE, FaultClass::IN);
+        haveConfig = false;
     }
 
     if (haveConfig && !smmuTLBLookup(yield, tr)) {
@@ -587,8 +598,11 @@ SMMUTranslationProcess::findConfig(Yield &yield,
     tc.stage1Enable = false;
     tc.stage2Enable = false;
 
-    StreamTableEntry ste;
-    doReadSTE(yield, ste, request.sid);
+    StreamTableEntry ste{};
+    tr.fault = doReadSTE(yield, ste, request.sid);
+    if (tr.isFaulting()) {
+        return false;
+    }
 
     switch (ste.dw0.config) {
         case STE_CONFIG_BYPASS:
@@ -608,8 +622,8 @@ SMMUTranslationProcess::findConfig(Yield &yield,
             break;
 
         default:
-            panic("Bad or unimplemented STE config %d\n",
-                ste.dw0.config);
+            tr.fault = Fault(FAULT_BAD_STE);
+            return false;
     }
 
 
@@ -630,9 +644,12 @@ SMMUTranslationProcess::findConfig(Yield &yield,
 
     // Now fetch stage 1 config.
     if (context.stage1Enable) {
-        ContextDescriptor cd;
+        ContextDescriptor cd{};
         tr = doReadCD(yield, cd, ste, request.sid, request.ssid);
 
+        if (tr.isFaulting()) {
+            return false;
+        }
         tc.ttb0 = cd.dw1.ttb0 << CD_TTB_SHIFT;
         tc.ttb1 = cd.dw2.ttb1 << CD_TTB_SHIFT;
         tc.asid = cd.dw0.asid;
@@ -1219,8 +1236,10 @@ SMMUTranslationProcess::issuePrefetch(Addr addr)
     if (!smmu.system.isTimingMode())
         return;
 
-    if (!ifc.prefetchEnable || ifc.xlateSlotsRemaining == 0)
+    if (smmu.commandBarrier || !ifc.prefetchEnable ||
+        ifc.xlateSlotsRemaining == 0) {
         return;
+    }
 
     std::string proc_name = csprintf("%sprf", name());
     SMMUTranslationProcess *proc =
@@ -1250,8 +1269,19 @@ SMMUTranslationProcess::abortTransaction(Yield &yield,
     }
 
     ifc.xlateSlotsRemaining++;
+    if (smmu.system.isTimingMode() && request.isWrite &&
+        !request.isAtsRequest) {
+        ifc.wrBufSlotsRemaining +=
+            (request.size + ifc.portWidth - 1) / ifc.portWidth;
+    }
     smmu.scheduleDeviceRetries();
 
+    if (auto *fault = request.pkt->findNextSenderState<SMMUv3Fault>()) {
+        fault->type = tr.fault.type;
+        fault->iova = request.addr;
+        fault->sid = request.sid;
+        fault->write = request.isWrite;
+    }
     if (smmu.system.isAtomicMode()) {
         request.pkt->makeAtomicResponse();
     } else if (smmu.system.isTimingMode()) {
@@ -1264,7 +1294,7 @@ SMMUTranslationProcess::abortTransaction(Yield &yield,
 
     SMMUAction a;
     // Send the bad address response to the client device
-    a.type = ACTION_SEND_RESP;
+    a.type = request.isAtsRequest ? ACTION_SEND_RESP_ATS : ACTION_SEND_RESP;
     a.pkt = request.pkt;
     a.ifc = &ifc;
     a.delay = 0;
@@ -1289,9 +1319,11 @@ SMMUTranslationProcess::completeTransaction(Yield &yield,
 
     smmu.stats.translationTimeDist.sample(curTick() - recvTick);
     ifc.xlateSlotsRemaining++;
-    if (!request.isAtsRequest && request.isWrite)
+    if (smmu.system.isTimingMode() && !request.isAtsRequest &&
+        request.isWrite) {
         ifc.wrBufSlotsRemaining +=
-            (request.size + (ifc.portWidth-1)) / ifc.portWidth;
+            (request.size + (ifc.portWidth - 1)) / ifc.portWidth;
+    }
 
     smmu.scheduleDeviceRetries();
 
@@ -1349,24 +1381,20 @@ SMMUTranslationProcess::completePrefetch(Yield &yield)
 SMMUEvent
 SMMUTranslationProcess::generateEvent(const TranslResult &tr)
 {
-    SMMUEvent event;
-    switch (tr.fault.type) {
-      case FAULT_PERMISSION:
-      case FAULT_TRANSLATION:
-        event.data.dw0.streamId = request.sid;
-        event.data.dw0.substreamId = request.ssid;
-        event.data.dw1.rnw = !request.isWrite;
-        event.data.dw2.inputAddr = request.addr;
-        event.data.dw1.s2 = tr.fault.stage2;
-        if (tr.fault.stage2) {
-            // Only support non-secure mode in the SMMU
-            event.data.dw1.nsipa = true;
-            event.data.dw3.ipa = tr.fault.ipa;
-        }
+    SMMUEvent event{};
+    event.data.dw0.eventType = tr.fault.type;
+    event.data.dw0.streamId = request.sid;
+    event.data.dw0.substreamId = request.ssid;
+    event.data.dw0.ssv = request.pkt->req->hasSubstreamId();
+    event.data.dw1.rnw = !request.isWrite;
+    event.data.dw2.inputAddr = request.addr;
+    event.data.dw1.s2 = tr.fault.stage2;
+    if (tr.fault.stage2) {
+        event.data.dw1.nsipa = true;
+        event.data.dw3.ipa = tr.fault.ipa >> 12;
+    }
+    if (tr.fault.clss != FaultClass::RESERVED) {
         event.data.dw1.clss = tr.fault.clss;
-        break;
-      default:
-        panic("Unsupported fault: %d\n", tr.fault.type);
     }
 
     return event;
@@ -1375,34 +1403,29 @@ SMMUTranslationProcess::generateEvent(const TranslResult &tr)
 void
 SMMUTranslationProcess::sendEvent(Yield &yield, const SMMUEvent &ev)
 {
-    int sizeMask = mask(smmu.regs.eventq_base & Q_BASE_SIZE_MASK);
-
-    if (((smmu.regs.eventq_prod+1) & sizeMask) ==
-            (smmu.regs.eventq_cons & sizeMask))
-        panic("Event queue full - aborting\n");
-
-    Addr event_addr =
-        (smmu.regs.eventq_base & Q_BASE_ADDR_MASK) +
-        (smmu.regs.eventq_prod & sizeMask) * sizeof(ev.data);
-
-    DPRINTF(SMMUv3, "Sending event to addr=%#08x (pos=%d): %s\n",
-        event_addr, smmu.regs.eventq_prod, ev.print());
-
-    bool empty_queue = (smmu.regs.eventq_prod & sizeMask) ==
-        (smmu.regs.eventq_cons & sizeMask);
-
-    // This deliberately resets the overflow field in eventq_prod!
-    smmu.regs.eventq_prod = (smmu.regs.eventq_prod + 1) & sizeMask;
-
+    doSemaphoreDown(yield, smmu.eventqSem);
+    const unsigned log_size = smmu.regs.eventq_base & Q_BASE_SIZE_MASK;
+    const uint32_t index_mask = mask(log_size);
+    const uint32_t wrap_mask = mask(log_size + 1);
+    const uint32_t prod = smmu.regs.eventq_prod & wrap_mask;
+    const uint32_t cons = smmu.regs.eventq_cons & wrap_mask;
+    if ((prod ^ cons) == (uint32_t(1) << log_size)) {
+        // Preserve OVFLG until software acknowledges it in CONS.OVACKFLG.
+        smmu.regs.eventq_prod =
+            prod | ((~smmu.regs.eventq_cons) & (uint32_t(1) << 31));
+        doSemaphoreUp(smmu.eventqSem);
+        smmu.updateEventqInterrupt();
+        return;
+    }
+    const Addr event_addr = (smmu.regs.eventq_base & Q_BASE_ADDR_MASK) +
+                            (prod & index_mask) * sizeof(ev.data);
     doWrite(yield, event_addr, &ev.data, sizeof(ev.data));
-
-    // Send an event queue interrupt when transitioning from empty to
-    // non empty queue
-    if (IRQCtrl irq_ctrl = smmu.regs.irq_ctrl;
-        irq_ctrl.eventqIrqEn && empty_queue) {
-
+    smmu.regs.eventq_prod = ((prod + 1) & wrap_mask) |
+                            (smmu.regs.eventq_prod & (uint32_t(1) << 31));
+    if (IRQCtrl ctrl = smmu.regs.irq_ctrl; ctrl.eventqIrqEn && prod == cons) {
         sendEventInterrupt(yield);
     }
+    doSemaphoreUp(smmu.eventqSem);
 }
 
 void
@@ -1424,14 +1447,14 @@ SMMUTranslationProcess::sendEventInterrupt(Yield &yield)
     }
 }
 
-void
-SMMUTranslationProcess::doReadSTE(Yield &yield,
-                                  StreamTableEntry &ste,
+SMMUTranslationProcess::Fault
+SMMUTranslationProcess::doReadSTE(Yield &yield, StreamTableEntry &ste,
                                   uint32_t sid)
 {
-    unsigned max_sid = 1 << (smmu.regs.strtab_base_cfg & ST_CFG_SIZE_MASK);
-    if (sid >= max_sid)
-        panic("SID %#x out of range, max=%#x", sid, max_sid);
+    const unsigned sid_bits = smmu.regs.strtab_base_cfg & ST_CFG_SIZE_MASK;
+    if (uint64_t(sid) >= (uint64_t(1) << sid_bits)) {
+        return Fault(FAULT_BAD_STREAMID);
+    }
 
     Addr ste_addr;
 
@@ -1440,7 +1463,7 @@ SMMUTranslationProcess::doReadSTE(Yield &yield,
             (smmu.regs.strtab_base_cfg & ST_CFG_SPLIT_MASK) >> ST_CFG_SPLIT_SHIFT;
 
         if (split!= 7 && split!=8 && split!=16)
-            panic("Invalid stream table split %d", split);
+            return Fault(FAULT_BAD_STE);
 
         uint64_t l2_ptr;
         uint64_t l2_addr =
@@ -1455,12 +1478,11 @@ SMMUTranslationProcess::doReadSTE(Yield &yield,
 
         unsigned span = l2_ptr & ST_L2_SPAN_MASK;
         if (span == 0)
-            panic("Invalid level 1 stream table descriptor");
+            return Fault(FAULT_BAD_STE);
 
         unsigned index = bits(sid, split-1, 0);
         if (index >= (1 << span))
-            panic("StreamID %d out of level 1 descriptor range %d",
-                  sid, 1<<span);
+            return Fault(FAULT_BAD_STREAMID);
 
         ste_addr = (l2_ptr & ST_L2_ADDR_MASK) + index * sizeof(ste);
 
@@ -1470,7 +1492,7 @@ SMMUTranslationProcess::doReadSTE(Yield &yield,
         ste_addr =
             (smmu.regs.strtab_base & VMT_BASE_ADDR_MASK) + sid * sizeof(ste);
     } else {
-        panic("Invalid stream table format");
+        return Fault(FAULT_BAD_STE);
     }
 
     DPRINTF(SMMUv3, "Read STE at %#x\n", ste_addr);
@@ -1487,9 +1509,10 @@ SMMUTranslationProcess::doReadSTE(Yield &yield,
     DPRINTF(SMMUv3, "    STE at %#x [7]: 0x%016x\n", ste_addr, ste._pad[3]);
 
     if (!ste.dw0.valid)
-        panic("STE @ %#x not valid\n", ste_addr);
+        return Fault(FAULT_BAD_STE);
 
     smmu.stats.steFetches++;
+    return Fault(FAULT_NONE);
 }
 
 SMMUTranslationProcess::TranslResult
@@ -1505,8 +1528,10 @@ SMMUTranslationProcess::doReadCD(Yield &yield,
         cd_addr = ste.dw0.s1ctxptr << ST_CD_ADDR_SHIFT;
     } else {
         unsigned max_ssid = 1 << ste.dw0.s1cdmax;
-        if (ssid >= max_ssid)
-            panic("SSID %#x out of range, max=%#x", ssid, max_ssid);
+        if (ssid >= max_ssid) {
+            tr.fault = Fault(FAULT_BAD_SUBSTREAMID);
+            return tr;
+        }
 
         if (ste.dw0.s1fmt==STAGE1_CFG_2L_4K ||
             ste.dw0.s1fmt==STAGE1_CFG_2L_64K)
@@ -1564,9 +1589,12 @@ SMMUTranslationProcess::doReadCD(Yield &yield,
     DPRINTF(SMMUv3, "    CD at %#x [6]: 0x%016x\n", cd_addr, cd._pad[1]);
     DPRINTF(SMMUv3, "    CD at %#x [7]: 0x%016x\n", cd_addr, cd._pad[2]);
 
-
-    if (!cd.dw0.valid)
-        panic("CD @ %#x not valid\n", cd_addr);
+    const unsigned min_t0sz = cd.dw0.tg0 == TRANS_GRANULE_64K ? 12 : 16;
+    if (!cd.dw0.valid || cd.dw0.tg0 == TRANS_GRANULE_INVALID ||
+        cd.dw0.t0sz < min_t0sz || cd.dw0.t0sz > 39) {
+        tr.fault = Fault(FAULT_BAD_CD);
+        return tr;
+    }
 
     smmu.stats.cdFetches++;
     return tr;
