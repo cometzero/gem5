@@ -3,6 +3,18 @@
 """Generic Arm CPU queue baseline; no A720AE identity spoofing."""
 
 
+def ap_release():
+    from m5.objects import (
+        ArmExtension,
+        Armv8,
+    )
+
+    release = Armv8()
+    # The NEON decoder implements byte PMULL only, not FEAT_PMULL's 64-bit form.
+    release.remove(ArmExtension("FEAT_PMULL"))
+    return release
+
+
 def create_cpu(params, cpu_id, switched_out=False, atomic=False):
     from m5.objects import (
         ArmAtomicSimpleCPU,
