@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Execute AP feature ID and crypto regression without Linux boot."""
+import argparse
 import binascii
 import json
 import struct
@@ -23,6 +24,9 @@ from m5.objects import (
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "configs"))
 from zena_cmn.cpu_profile import ap_release
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--stlur", action="store_true")
+args = parser.parse_args()
 ram = 0x80000000
 system = ArmSystem(
     workload=ArmFsWorkload(),
@@ -50,7 +54,11 @@ system.cpu.icache_port = system.bus.cpu_side_ports
 system.cpu.dcache_port = system.bus.cpu_side_ports
 root = Root(full_system=True, system=system)
 out = Path(m5.options.outdir)
-source = Path(__file__).with_suffix(".S")
+source = (
+    Path(__file__).with_name("stlur.S")
+    if args.stlur
+    else Path(__file__).with_suffix(".S")
+)
 subprocess.run(
     ["aarch64-linux-gnu-as", str(source), "-o", str(out / "features.o")],
     check=True,
@@ -70,6 +78,28 @@ proxy = system.getCCObject().physProxy
 proxy.write(ram, (out / "features.bin").read_bytes())
 m5.simulate(100000000)
 words = struct.unpack("<9Q", proxy.read(ram + 0x1000, 72))
+if args.stlur:
+    expected = (
+        0x88AAAAAAAAAAAAAA,
+        0xAAAAAAAA7788AAAA,
+        0xAAAAAAAA55667788,
+        0x1122334455667788,
+        0x55667788,
+        0x1122334455667788,
+        0x1122334455667788,
+        0,
+        0xCAFE,
+    )
+    assert words == expected, ([hex(w) for w in words], expected)
+    result = {
+        "status": "PASS",
+        "stlur_widths": [1, 2, 4, 8],
+        "ldapur_widths": [4, 8],
+        "negative_offset_sp_zr": "PASS",
+    }
+    (out / "stlur-result.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result))
+    raise SystemExit(0)
 isar, smfr, crc, aes_low, aes_high, sha1, sha2_low, sha2_high, done = words
 assert done == 0xCAFE, words
 assert [(isar >> shift) & 15 for shift in (4, 8, 12, 16)] == [1] * 4

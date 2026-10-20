@@ -1599,22 +1599,30 @@ namespace Aarch64
                RegIndex rnsp = makeSP(rn);
                uint64_t imm = sext<9>(bits(machInst, 20, 12));
                switch (switchVal) {
+                 case 0x0:
+                   return new STLURB64_IMM(machInst, rt, rnsp, imm);
                  case 0x1:
                    return new LDAPURB64_IMM(machInst, rt, rnsp, imm);
                  case 0x2:
                    return new LDAPURSBX64_IMM(machInst, rt, rnsp, imm);
                  case 0x3:
                    return new LDAPURSBW64_IMM(machInst, rt, rnsp, imm);
+                 case 0x4:
+                   return new STLURH64_IMM(machInst, rt, rnsp, imm);
                  case 0x5:
                    return new LDAPURH64_IMM(machInst, rt, rnsp, imm);
                  case 0x6:
                    return new LDAPURSHX64_IMM(machInst, rt, rnsp, imm);
                  case 0x7:
                    return new LDAPURSHW64_IMM(machInst, rt, rnsp, imm);
+                 case 0x8:
+                   return new STLURW64_IMM(machInst, rt, rnsp, imm);
                  case 0x9:
-                   return new LDAPURX64_IMM(machInst, rt, rnsp, imm);
-                 case 0xd:
                    return new LDAPURW64_IMM(machInst, rt, rnsp, imm);
+                 case 0xc:
+                   return new STLURX64_IMM(machInst, rt, rnsp, imm);
+                 case 0xd:
+                   return new LDAPURX64_IMM(machInst, rt, rnsp, imm);
                  case 0xa:
                    return new LDAPURSW64_IMM(machInst, rt, rnsp, imm);
                  default:

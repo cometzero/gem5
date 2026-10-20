@@ -13,6 +13,12 @@ AES/SHA1/SHA256/CRC32는 유지하며 Linux GPT 검사는 지원되는 CRC 경�
 SVE PMULL 구현은 별도 ISA이며 NEON의 누락된 64-bit 명령을 대체하지 않는다.
 `tests/zena_cmn/directed/ap_features.py`는 실제 ID register와
 AES/SHA1/SHA256/CRC32 명령을 짧게 검증한다.
+Yocto Cortex-A720 loader가 사용하는 STLUR byte/halfword/word/doubleword는
+기존 store-release의 ordering/barrier 경로를 재사용한다. 같은 명령군의
+LDAPUR word/doubleword decode 폭도 일치시켰다.
+위 회귀를 `--stlur`로 실행하면 폭별 인접 byte 보존, 음수 offset, SP/ZR,
+LDAPUR zero extension을 검증한다. 이 검사는 multicore weak-order litmus를
+대신하지 않으며 release semantics는 기존 STLR 경로에서 상속한다.
 아래 `/srv/oss_contrib` 실행 예와 외부 helper 의존성은 참조 workspace용이며,
 Apollo 실행 계약은 상위 workspace `doc/apollo-gem5.md`를 따른다.
 
