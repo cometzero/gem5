@@ -108,6 +108,14 @@ class ArmISA(BaseISA):
     #   False -> Cortex-A15 TRM r0p0 MIDR is used
     midr = Param.UInt32(0x0, "MIDR value")
 
+    cache_id_registers_enabled = Param.Bool(
+        False, "Use explicit CLIDR/CCSIDR geometry (does not change caches)"
+    )
+    clidr = Param.UInt32(0, "Cache Level ID Register")
+    ccsidr = VectorParam.UInt32(
+        [0] * 14, "CCSIDR values indexed by CSSELR (level * 2 + InD)"
+    )
+
     # See section B4.1.89 - B4.1.92 of the ARM ARM
     #  VMSAv7 support
     id_mmfr0 = Param.UInt32(0x10201103, "Memory Model Feature Register 0")
