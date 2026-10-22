@@ -79,3 +79,24 @@ python3 gem5/scripts/zena_cmn/run_smoke.py \
 짧은 정합성 smoke는 `--eviction-mib 1`을 명시한다. `--eviction-mib 64`의 큰 working set은 별도 장시간 검사이며, 1 MiB 실행으로 대용량 eviction을 검증했다고 주장하지 않는다. 원래 64 MiB 16코어 시도는 20분 host 예산 안에 ROI까지 도달하지 못했다.
 
 실행 기본 LQ는 32이다. 설계 입력의 LQ64는 동일 cache-line 응답 집중으로 native O3 writeback 큐 assertion을 재현하여 채택하지 않았다. 자세한 원인과 재현 증거는 보고서에 있다.
+
+### Diskless Atomic boot checkpoint
+
+`run_fs.py --checkpoint-dir /absolute/new-directory`는 guest의 `m5 checkpoint`
+이벤트에서 drain/writeback 후 상태를 저장하고 종료한다. 저장은 NPU가 없는
+**diskless Atomic boot, ROI 전환 이전**에만 허용한다. disk 장치, timing boot,
+O3 전환 이후 checkpoint는 거부한다. 기존/부분 저장 directory도 덮어쓰지 않는다.
+완료 표시는 checkpoint directory의 `apollo-checkpoint.json`이며 simulator
+저장이 반환된 뒤 atomic rename으로 게시한다. 실패 시 완료 표시는 남기지 않는다.
+
+`--restore /absolute/checkpoint`는 해당 완료 표시와 `m5.cpt`, profile 및
+kernel/firmware/initrd hash와 cmdline 일치를 요구한다. `--readfile /host/script`
+내용은 System.readfile로 전달하며 restore마다 바꿀 수 있다. 복원은 Atomic
+boot 상태에서 재개하고 기존 guest switch/warmup/ROI marker를 그대로 사용한다.
+호스트 launcher는 simulator binary/source 및 추가 입력 compatibility를 검증한다.
+
+`tests/zena_cmn/directed/checkpoint_boot.py --manifest <native-json> --outdir <new-dir>`는
+실제 AP/Ruby 객체에서 저장/복원한 레지스터와 RAM, 새 readfile 입력, 복원 후 O3
+전환과 ROI 종료를 검사하는 baremetal 회귀다. 이 검사가 Linux initramfs 복원이나
+실제 제품 장치 전체의 checkpoint 지원을 입증하지는 않는다. diskless boot의
+Ruby cache는 Atomic noncaching 상태이며 timing cache snapshot은 지원 범위 밖이다.
