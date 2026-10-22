@@ -29,6 +29,11 @@ from m5.objects import (
 CONFIGS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CONFIGS))
 sys.path.insert(0, str(CONFIGS / "example" / "arm"))
+from zena_cmn.checkpoint import (
+    read_metadata,
+    save_checkpoint,
+    validate_options,
+)
 from zena_cmn.cpu_profile import (
     ap_release,
     cache_id_registers,
@@ -61,6 +66,9 @@ def main():
     parser.add_argument("--bootloader", required=True, type=file_arg)
     parser.add_argument("--initrd", required=True, type=file_arg)
     parser.add_argument("--disk-image", type=file_arg)
+    parser.add_argument("--checkpoint-dir")
+    parser.add_argument("--restore")
+    parser.add_argument("--readfile", type=file_arg)
     parser.add_argument(
         "--boot-mode", choices=("atomic", "timing"), default="atomic"
     )
@@ -111,6 +119,16 @@ def main():
         parser.error(
             "Zena firmware and MPIDR contract require four CPUs per cluster"
         )
+    try:
+        validate_options(
+            args.checkpoint_dir,
+            args.restore,
+            args.boot_mode == "atomic",
+            args.disk_image,
+            params["npu"]["enabled"],
+        )
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
     args.cpus = params["cpu"]["cores"]
     args.warm_reset = False
     original_kernel = args.kernel
@@ -124,6 +142,7 @@ def main():
     atomic = args.boot_mode == "atomic"
     system = ArmSystem(
         mem_mode="atomic_noncaching" if atomic else "timing",
+        readfile=args.readfile or "",
         mem_ranges=[AddrRange(ZenaCSS._RAM_BASE, size=ZenaCSS._RAM_SIZE)],
         cpu_affinities=[ZenaCSS.affinity(i) for i in range(args.cpus)],
         release=ap_release(),
@@ -265,13 +284,26 @@ def main():
             if smmu is not None
             else "NOT_PRESENT"
         ),
-        "checkpoint_restore": "UNSUPPORTED",
+        "checkpoint_restore": "DISKLESS_ATOMIC_BOOT_ONLY",
+        "restore": args.restore,
+        "readfile": args.readfile,
     }
     (outdir / "manifest.json").write_text(
         json.dumps(manifest, indent=2) + "\n"
     )
     root = Root(full_system=True, system=system)
-    m5.instantiate()
+    contract = {
+        "profile": params,
+        "kernel_sha256": file_digest(original_kernel),
+        "bootloader_sha256": file_digest(args.bootloader),
+        "initrd_sha256": file_digest(args.initrd),
+        "command_line": args.command_line,
+    }
+    if args.restore and read_metadata(args.restore)["contract"] != contract:
+        parser.error("checkpoint boot contract mismatch")
+    m5.instantiate(args.restore)
+    if args.max_ticks <= m5.curTick():
+        parser.error("max-ticks must exceed restored checkpoint tick")
     control = RoiControl(
         system,
         outdir,
@@ -281,6 +313,26 @@ def main():
     )
     while m5.curTick() < args.max_ticks:
         event = m5.simulate(args.max_ticks - m5.curTick())
+        if event.getCause() == "checkpoint":
+            saved = save_checkpoint(args.checkpoint_dir, control, contract)
+            (outdir / "exit.json").write_text(
+                json.dumps(
+                    {
+                        "status": "CHECKPOINT_SAVED",
+                        "cause": "checkpoint_saved",
+                        "code": 0,
+                        "tick": saved["tick"],
+                        "phase": "boot",
+                        "checkpoint": args.checkpoint_dir,
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+            print(
+                f"CMN_EXIT cause=checkpoint_saved code=0 tick={saved['tick']}"
+            )
+            break
         if control.handle(event.getCause(), event.getCode()):
             continue
         print(
