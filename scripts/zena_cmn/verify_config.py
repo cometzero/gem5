@@ -134,6 +134,153 @@ def partition(ranges, base, count, interleave_bytes=64):
     )
 
 
+def verify_noc(network, controllers, profile):
+    """Check the v26 CHI node and CustomMesh transport contract."""
+    failures = []
+
+    def check(condition, description):
+        if not condition:
+            failures.append(description)
+
+    cmn = profile["cmn"]
+    mesh = cmn["mesh"]
+    simple = cmn.get("network") == "simple"
+    mesh_count = mesh["rows"] * mesh["columns"]
+    routers = network["routers"]
+    mesh_paths = {
+        router["path"]
+        for router in routers
+        if router["router_id"] < mesh_count
+    }
+    node_latency = mesh["node_link_latency_cycles"]
+    check(
+        network["type"] == ("SimpleNetwork" if simple else "GarnetNetwork"),
+        "selected network implementation",
+    )
+    check(
+        len(routers) == mesh_count + profile["cpu"]["clusters"],
+        "mesh plus cluster router count",
+    )
+    check(
+        network.get("control_msg_size") == 8
+        and network.get("data_msg_size") == cmn["data_channel_bytes"],
+        "CHI network message sizes",
+    )
+    if simple:
+        check(network.get("netifs") == [], "Simple network has no Garnet NI")
+        check(
+            network.get("endpoint_bandwidth") == 1000
+            and network.get("physical_vnets_channels") == []
+            and network.get("physical_vnets_bandwidth") == [],
+            "Simple shared-vnet bandwidth model",
+        )
+        check(network.get("buffer_size") == 32, "Simple finite buffer default")
+    else:
+        for field, key in (
+            ("ni_flit_size", "flit_bytes"),
+            ("vcs_per_vnet", "vcs_per_vnet"),
+            ("buffers_per_ctrl_vc", "control_buffer_flits"),
+            ("buffers_per_data_vc", "data_buffer_flits"),
+        ):
+            check(network.get(field) == mesh[key], f"Garnet {field}")
+    for router in routers:
+        local = router["router_id"] >= mesh_count
+        latency = (
+            (0 if simple else 1) if local else mesh["router_latency_cycles"]
+        )
+        if simple:
+            check(
+                router.get("int_routing_latency") == latency
+                and router.get("ext_routing_latency") == latency,
+                f"Simple routing latency: {router['path']}",
+            )
+            buffers = router.get("port_buffers", [])
+            check(
+                bool(buffers) and all(b["buffer_size"] == 32 for b in buffers),
+                f"Simple finite switch buffers: {router['path']}",
+            )
+        else:
+            check(
+                router.get("latency") == latency,
+                f"Garnet routing latency: {router['path']}",
+            )
+    for kind in ("ext_links", "int_links"):
+        for link in network[kind]:
+            local = kind == "ext_links" or any(
+                link[end] not in mesh_paths for end in ("src_node", "dst_node")
+            )
+            latency = (
+                node_latency if local else mesh["router_link_latency_cycles"]
+            )
+            if simple:
+                check(
+                    link.get("bandwidth_factor") == mesh["flit_bytes"]
+                    and link["latency"] == latency,
+                    f"Simple link bandwidth/latency: {link['path']}",
+                )
+                if kind == "int_links":
+                    buffers = link.get("buffers", [])
+                    check(
+                        len(buffers) == 4
+                        and all(b["buffer_size"] == 32 for b in buffers),
+                        f"Simple finite link buffers: {link['path']}",
+                    )
+            else:
+                check(
+                    link["latency"] == latency,
+                    f"Garnet link latency: {link['path']}",
+                )
+    for controller in controllers:
+        path = controller["path"]
+        private = re.fullmatch(r"system\.cpu(\d+)\.(l1i|l1d|l2)", path)
+        integrated = private and profile["cache"].get(
+            "integrated_private_pipeline", False
+        )
+        latencies = {
+            name: (
+                0
+                if integrated and name in ("request", "data")
+                else node_latency
+            )
+            for name in ("request", "response", "snoop", "data")
+        }
+        check(
+            all(
+                controller.get(name + "_latency") == value
+                for name, value in latencies.items()
+            ),
+            f"CHI controller pipeline: {path}",
+        )
+        if private:
+            check(
+                controller.get("request_latency") == latencies["request"]
+                and controller.get("data_latency") == latencies["data"]
+                and controller["reqOut"].get("allow_zero_latency")
+                == bool(integrated)
+                and controller["datOut"].get("allow_zero_latency")
+                == bool(integrated),
+                f"CPU{private[1]} {private[2]} private pipeline handoff",
+            )
+        check(
+            controller.get("data_channel_size") == cmn["data_channel_bytes"],
+            f"CHI controller data width: {path}",
+        )
+        for port in ("req", "snp", "rsp", "dat"):
+            for direction in ("In", "Out"):
+                buffer = controller.get(port + direction, {})
+                bounded = simple and (
+                    direction == "In"
+                    or controller["type"] == "CHI_Cache_Controller"
+                )
+                check(
+                    buffer.get("max_dequeue_rate") == 1
+                    and buffer.get("buffer_size")
+                    == (node_latency + 1 if bounded else 0),
+                    f"CHI controller buffer: {path}.{port}{direction}",
+                )
+    return failures
+
+
 def verify(config, profile):
     failures = []
 
@@ -310,16 +457,6 @@ def verify(config, profile):
             f"CPU{i} L2 read hit pipeline",
         )
         for level in ("l1i", "l1d", "l2"):
-            integrated = profile["cache"].get(
-                "integrated_private_pipeline", False
-            )
-            check(
-                cpu[level]["request_latency"] == (0 if integrated else 1)
-                and cpu[level]["data_latency"] == (0 if integrated else 1)
-                and cpu[level]["reqOut"]["allow_zero_latency"] == integrated
-                and cpu[level]["datOut"]["allow_zero_latency"] == integrated,
-                f"CPU{i} {level} private pipeline handoff",
-            )
             spec = profile["cache"][level]
             cache_profile(cpu[level], spec, spec["size_kib_per_core"] * 1024)
             check(
@@ -469,63 +606,22 @@ def verify(config, profile):
                     f"MMIO/RAM overlap: {obj['path']}",
                 )
     network = ruby["network"]
-    mesh = profile["cmn"]["mesh"]
-    check(
-        network["type"]
-        == (
-            "SimpleNetwork"
-            if profile["cmn"].get("network") == "simple"
-            else "GarnetNetwork"
-        ),
-        "selected network implementation",
-    )
-    check(
-        len(network["routers"]) == mesh["rows"] * mesh["columns"] + clusters,
-        "mesh plus cluster router count",
-    )
-    if profile["cmn"].get("network") == "simple":
-        check(network.get("netifs") == [], "Simple network has no Garnet NI")
-        check(
-            network.get("endpoint_bandwidth") == 1000
-            and network.get("physical_vnets_channels") == []
-            and network.get("physical_vnets_bandwidth") == [],
-            "Simple shared-vnet bandwidth model",
-        )
-        check(network.get("buffer_size") == 32, "Simple finite buffer default")
-        mesh_routers = mesh["rows"] * mesh["columns"]
-        for router in network["routers"]:
-            latency = (
-                0
-                if router["router_id"] >= mesh_routers
-                else mesh["router_latency_cycles"]
-            )
-            check(
-                router.get("int_routing_latency") == latency
-                and router.get("ext_routing_latency") == latency,
-                f"Simple routing latency: {router['path']}",
-            )
-            buffers = router.get("port_buffers", [])
-            check(
-                bool(buffers) and all(b["buffer_size"] == 32 for b in buffers),
-                f"Simple finite switch buffers: {router['path']}",
-            )
-        for kind, latency in (
-            ("ext_links", mesh["node_link_latency_cycles"]),
-            ("int_links", mesh["router_link_latency_cycles"]),
-        ):
-            for link in network[kind]:
-                check(
-                    link.get("bandwidth_factor") == mesh["flit_bytes"]
-                    and link["latency"] == latency,
-                    f"Simple link bandwidth/latency: {link['path']}",
+    failures.extend(
+        verify_noc(
+            network,
+            [
+                obj
+                for obj in index.values()
+                if obj["type"]
+                in (
+                    "CHI_Cache_Controller",
+                    "CHI_Memory_Controller",
+                    "CHI_MiscNode_Controller",
                 )
-                if kind == "int_links":
-                    buffers = link.get("buffers", [])
-                    check(
-                        len(buffers) == 4
-                        and all(b["buffer_size"] == 32 for b in buffers),
-                        f"Simple finite link buffers: {link['path']}",
-                    )
+            ],
+            profile,
+        )
+    )
     attachments = {
         link["ext_node"]: link["int_node"] for link in network["ext_links"]
     }

@@ -13,6 +13,7 @@ from ruby.CHI_config import (
 )
 from zena_cmn.chi_topology import (
     build_topology,
+    noc_parameters,
     place_node_type,
 )
 from zena_cmn.cluster_rnf import ZenaClusterRNF
@@ -43,13 +44,14 @@ def build_ruby(
     ruby.block_size_bytes = params["cache"]["line_bytes"]
     cmn = params["cmn"]
     mesh = cmn["mesh"]
-    network_type = cmn.get("network", "garnet")
+    noc = noc_parameters(params)
+    network_type = noc.network
     network_args = dict(
         ruby_system=ruby,
         topology="CustomMesh",
         number_of_virtual_networks=4,
-        control_msg_size=8,
-        data_msg_size=cmn["data_channel_bytes"],
+        control_msg_size=noc.cntrl_msg_size,
+        data_msg_size=noc.data_width,
         clk_domain=SrcClockDomain(
             clock=mesh["clock"], voltage_domain=system.voltage_domain
         ),
@@ -67,10 +69,25 @@ def build_ruby(
     elif network_type == "simple":
         # Message-level diagnostic: no Garnet VC/tail-flit timing equivalence.
         ruby.network = SimpleNetwork(
-            buffer_size=32, endpoint_bandwidth=1000, **network_args
+            buffer_size=noc.router_buffer_size,
+            endpoint_bandwidth=1000,
+            **network_args,
         )
     else:
         raise ValueError(f"unsupported CHI network: {network_type}")
+    # v26 CHI consumes the node's NoC settings inside connectController(),
+    # before topology construction. Set every node type before creating it.
+    place_node_type(ZenaClusterRNF, mesh["cluster_attach"], noc)
+    place_node_type(CHI_HNF, mesh["home_attach"], noc)
+    channels = params["memory"]["channels"]
+    # Reduced channel layouts retain even spacing across the same mesh.
+    place_node_type(
+        CHI_SNF_MainMem,
+        mesh["snf_attach_for_16_channels"][:: 16 // channels],
+        noc,
+    )
+    for auxiliary in (CHI_MN, CHI_SNF_BootMem, CHI_RNI_DMA, CHI_RNI_IO):
+        place_node_type(auxiliary, [0], noc)
     backend = build_memory_backend(system, params)
     ruby._memory_backend = backend
     group_size = params["cpu"]["cores_per_cluster"]
@@ -147,21 +164,14 @@ def build_ruby(
         node.setDownstream(mem_destinations)
     for node in nodes:
         for controller in node.getAllControllers():
-            controller.data_channel_size = cmn["data_channel_bytes"]
+            # Upstream connectController uses the module-level data_width,
+            # so resolve the project's width on every assembled controller.
+            controller.data_channel_size = noc.data_width
     if params["ruby"]["timing_dvm"]:
         for cpu in cpus:
             for decoder in cpu.decoder:
                 decoder.dvm_enabled = True
-    place_node_type(ZenaClusterRNF, mesh["cluster_attach"])
-    place_node_type(CHI_HNF, mesh["home_attach"])
-    channels = params["memory"]["channels"]
-    # Reduced channel layouts retain even spacing across the same mesh.
-    place_node_type(
-        CHI_SNF_MainMem, mesh["snf_attach_for_16_channels"][:: 16 // channels]
-    )
-    for auxiliary in (CHI_MN, CHI_SNF_BootMem, CHI_RNI_DMA, CHI_RNI_IO):
-        place_node_type(auxiliary, [0])
-    build_topology(ruby.network, nodes, params)
+    build_topology(ruby.network, nodes, params, noc)
     ruby.number_of_virtual_networks = 4
     ruby._cpu_ports = [
         seq for node in ruby.rnf for seq in node.getSequencers()
