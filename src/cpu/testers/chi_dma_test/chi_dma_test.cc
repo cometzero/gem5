@@ -104,6 +104,9 @@ ChiDmaTest::complete(PacketPtr pkt)
     const auto completed = state->index;
     delete state;
     fatal_if(pkt->isError(), "Test op %u returned error", completed);
+    // Maintenance and NC operations use CHI rather than the DMA bypass port.
+    fatal_if(config.commands[completed] >= 2 && pkt->completerBusy < 0,
+             "Test op %u omitted CHI completer occupancy", completed);
     if (pkt->isRead()) {
         auto got = pkt->getLE<uint64_t>();
         fatal_if(got != config.values[completed],

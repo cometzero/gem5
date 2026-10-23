@@ -4846,7 +4846,7 @@ action(CacheMaintenance_Send, desc="") {
 
 action(CacheMaintenance_Done, desc="") {
   if (tbe.requestor == machineID) {
-    sequencer.writeUniqueCallback(tbe.addr, tbe.dataBlk);
+    sequencer.writeUniqueCallbackCBusy(tbe.addr, tbe.dataBlk, cbusy_tracker.report());
   } else {
     enqueue(rspOutPort, CHIResponseMsg, response_latency) {
       out_msg.addr := address;
@@ -4884,7 +4884,7 @@ action(Initiate_UncachedStore, desc="") {
 
 
 action(UncachedStore_Done, desc="") {
-  sequencer.writeUniqueCallback(tbe.addr, tbe.dataBlk);
+  sequencer.writeUniqueCallbackCBusy(tbe.addr, tbe.dataBlk, cbusy_tracker.report());
 }
 
 action(Initiate_UncachedWriteUnique, desc="") {
