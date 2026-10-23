@@ -43,7 +43,7 @@ with gem5_scons.Configure(main) as conf:
     # Check for <capstone.h>
     conf.env['CONF']['HAVE_CAPSTONE'] = conf.CheckHeader('capstone/capstone.h', '<>')
     if conf.env['CONF']['HAVE_CAPSTONE']:
-        conf.env['CONF']['HAVE_CAPSTONE'] = conf.TryCompile(
+        conf.env['CONF']['HAVE_CAPSTONE'] = bool(conf.TryCompile(
             """
             #include <capstone/capstone.h>
             #if !defined(CS_API_MAJOR) || CS_API_MAJOR < 4
@@ -51,7 +51,7 @@ with gem5_scons.Configure(main) as conf:
             #endif
             """,
             extension=".cc",
-        )
+        ))
 
     if conf.env['CONF']['HAVE_CAPSTONE']:
         conf.env.TagImplies('capstone', 'gem5 lib')

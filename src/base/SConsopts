@@ -43,7 +43,7 @@ with gem5_scons.Configure(main) as conf:
     # frame buffer image in png format)
     conf.env['CONF']['HAVE_PNG'] = conf.CheckHeader('png.h', '<>')
     if conf.env['CONF']['HAVE_PNG']:
-        conf.env['CONF']['HAVE_PNG'] = conf.TryCompile(
+        conf.env['CONF']['HAVE_PNG'] = bool(conf.TryCompile(
             """
             #include <png.h>
             #if !defined(PNG_LIBPNG_VER) || PNG_LIBPNG_VER < 10600
@@ -51,7 +51,7 @@ with gem5_scons.Configure(main) as conf:
             #endif
             """,
             extension=".cc",
-        )
+        ))
 
     if conf.env['CONF']['HAVE_PNG']:
         conf.env.TagImplies('png', 'gem5 lib')
