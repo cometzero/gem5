@@ -259,7 +259,7 @@ def verify_noc(network, controllers, profile):
                 == bool(integrated)
                 and controller["datOut"].get("allow_zero_latency")
                 == bool(integrated),
-                f"CPU{private[1]} {private[2]} private pipeline handoff",
+                f"CPU{int(private[1])} {private[2]} private pipeline handoff",
             )
         check(
             controller.get("data_channel_size") == cmn["data_channel_bytes"],
