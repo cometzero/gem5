@@ -20,6 +20,38 @@ spec.loader.exec_module(module)
 
 
 class LifecycleTest(unittest.TestCase):
+    def test_reset_flush_preserves_previous_phase_and_case(self):
+        flushed = []
+        fake = types.SimpleNamespace(
+            stats=types.SimpleNamespace(
+                reset=lambda: flushed.append(
+                    (control.phase, control.active_case)
+                ),
+                dump=lambda: flushed.append(
+                    (control.phase, control.active_case)
+                ),
+            ),
+            curTick=lambda: 50,
+        )
+        with (
+            tempfile.TemporaryDirectory() as output,
+            patch.dict(sys.modules, m5=fake),
+        ):
+            control = module.RoiControl(None, output, False, multi_roi=True)
+            control.handle("workbegin", 0x5A535743)
+            for case in (1, 2):
+                control.handle("workbegin", case)
+                control.handle("workend", 0)
+        self.assertEqual(
+            flushed,
+            [
+                ("warmup", None),
+                ("roi_begin", 1),
+                ("warmup", None),
+                ("roi_begin", 2),
+            ],
+        )
+
     def test_atomic_switch_and_single_roi(self):
         fake = types.SimpleNamespace(
             drain=Mock(),
@@ -28,8 +60,9 @@ class LifecycleTest(unittest.TestCase):
             curTick=lambda: 50,
         )
         system = types.SimpleNamespace(cpu=[1, 2], roi_cpu=[3, 4])
-        with tempfile.TemporaryDirectory() as output, patch.dict(
-            sys.modules, m5=fake
+        with (
+            tempfile.TemporaryDirectory() as output,
+            patch.dict(sys.modules, m5=fake),
         ):
             control = module.RoiControl(system, output, True)
             with self.assertRaises(RuntimeError):

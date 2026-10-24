@@ -44,8 +44,8 @@ class RoiControl:
             if cause == "workbegin" and code > 0 and self.phase == "warmup":
                 if code in self.completed_cases:
                     raise RuntimeError("duplicate ROI case")
-                self.active_case = code
                 m5.stats.reset()
+                self.active_case = code
                 self.phase = "roi_begin"
             elif (
                 cause == "workend" and code == 0 and self.phase == "roi_begin"
