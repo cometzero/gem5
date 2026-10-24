@@ -362,30 +362,22 @@ def prepare():
         stat.prepare()
 
     # New stats
-    _visit_stats(lambda g, s: s.prepare())
+    _m5_stats.prepareGroupChildren(Root.getInstance().getCCObject())
 
 
 def _dump_to_visitor(visitor, roots=None):
     # New stats
-    def dump_group(group):
-        for stat in group.getStats():
-            stat.visit(visitor)
-        for n, g in group.getStatGroups().items():
-            visitor.beginGroup(n)
-            dump_group(g)
-            visitor.endGroup()
-
     if roots:
         # New stats from selected subroots.
         for root in roots:
             for p in root.path_list():
                 visitor.beginGroup(p)
-            dump_group(root)
+            _m5_stats.dumpGroup(visitor, root.getCCObject())
             for p in reversed(root.path_list()):
                 visitor.endGroup()
     else:
         # New stats starting from root.
-        dump_group(Root.getInstance())
+        _m5_stats.dumpGroup(visitor, Root.getInstance().getCCObject())
 
         # Legacy stats
         for stat in stats_list:

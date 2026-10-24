@@ -85,6 +85,34 @@ cast_stat_info(const statistics::Info *info)
 #undef TRY_CAST
 }
 
+// Match m5.stats._visit_groups: preparation starts at the children, not at
+// the starting group itself. Legacy stats are handled by the Python caller.
+static void
+prepareGroupChildren(const statistics::Group &group)
+{
+    for (const auto &[name, child] : group.getStatGroups()) {
+        for (auto *stat : child->getStats()) {
+            stat->prepare();
+        }
+        prepareGroupChildren(*child);
+    }
+}
+
+// Export includes the starting group. Keep the registered stat order and
+// map-ordered child groups, as in the Python reference traversal.
+static void
+dumpGroup(statistics::Output &output, const statistics::Group &group)
+{
+    for (auto *stat : group.getStats()) {
+        stat->visit(output);
+    }
+    for (const auto &[name, child] : group.getStatGroups()) {
+        output.beginGroup(name.c_str());
+        dumpGroup(output, *child);
+        output.endGroup();
+    }
+}
+
 namespace statistics
 {
 
@@ -109,10 +137,9 @@ pybind_init_stats(py::module_ &m_native)
 {
     py::module_ m = m_native.def_submodule("stats");
 
-    m
-        .def("initSimStats", &statistics::initSimStats)
+    m.def("initSimStats", &statistics::initSimStats)
         .def("initText", &statistics::initText,
-            py::return_value_policy::reference)
+             py::return_value_policy::reference)
 #if HAVE_HDF5
         .def("initHDF5", &statistics::initHDF5)
 #endif
@@ -126,7 +153,8 @@ pybind_init_stats(py::module_ &m_native)
         .def("enable", &statistics::enable)
         .def("enabled", &statistics::enabled)
         .def("statsList", &statistics::statsList)
-        ;
+        .def("prepareGroupChildren", &prepareGroupChildren)
+        .def("dumpGroup", &dumpGroup);
 
     py::class_<statistics::Output>(m, "Output")
         .def("begin", &statistics::Output::begin)
