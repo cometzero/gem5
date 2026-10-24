@@ -1199,6 +1199,20 @@ namespace ArmISA
         // saving/restoring register values.
         NUM_PHYS_MISCREGS,
 
+        // PMSA state is separately checkpointed; preserve VMSA checkpoints.
+        MISCREG_MPUIR_EL1,
+        MISCREG_PRSELR_EL1,
+        MISCREG_PRBAR_EL1,
+        MISCREG_PRLAR_EL1,
+        MISCREG_PRENR_EL1,
+        MISCREG_MPUIR_EL2,
+        MISCREG_PRSELR_EL2,
+        MISCREG_PRBAR_EL2,
+        MISCREG_PRLAR_EL2,
+        MISCREG_PRENR_EL2,
+        MISCREG_IMP_ITCMREGIONR_EL1,
+        MISCREG_IMP_DTCMREGIONR_EL1,
+
         // Dummy registers
         MISCREG_NOP,
         MISCREG_RAZ,
@@ -2459,6 +2473,19 @@ struct MiscRegNum32
         "pir_el12",
 
         "num_phys_regs",
+
+        "mpuir_el1",
+        "prselr_el1",
+        "prbar_el1",
+        "prlar_el1",
+        "prenr_el1",
+        "mpuir_el2",
+        "prselr_el2",
+        "prbar_el2",
+        "prlar_el2",
+        "prenr_el2",
+        "imp_itcmregionr_el1",
+        "imp_dtcmregionr_el1",
 
         // Dummy registers
         "nop",

@@ -1153,6 +1153,13 @@ MMU::translateFs(const RequestPtr &req, ThreadContext *tc, Mode mode,
     // No such thing as a functional timing access
     assert(!(timing && functional));
 
+    auto *isa = static_cast<ISA *>(tc->getIsaPtr());
+    if (isa->pmsaEnabled()) {
+        return isa->translatePmsa(
+            req, mode, state.isPriv && !(req->getFlags() & UserMode),
+            state.sctlr);
+    }
+
     Addr vaddr_tainted = req->getVaddr();
     Addr vaddr = 0;
     if (state.aarch64) {

@@ -74,6 +74,15 @@ class ArmISA(BaseISA):
     #   False -> Cortex-A15 TRM r0p0 MIDR is used
     midr = Param.UInt32(0x0, "MIDR value")
 
+    pmsa64 = Param.Bool(False, "Enable experimental PMSAv8-64 execution")
+    pmsa_regions = Param.Unsigned(16, "MPU regions per EL (1..32)")
+    pmsa_itcm = Param.AddrRange(AddrRange(0, size=0), "Private ITCM window")
+    pmsa_dtcm = Param.AddrRange(AddrRange(0, size=0), "Private DTCM window")
+    pmsa_tcm_wait = Param.Unsigned(0, "TCM wait states exposed to guest")
+    pmsa_uncached_data_ranges = VectorParam.AddrRange(
+        [], "Explicit uncached data paths (e.g. unmodeled LLRAM write-through)"
+    )
+
     cache_id_registers_enabled = Param.Bool(
         False, "Use explicit CLIDR/CCSIDR geometry (does not change caches)"
     )

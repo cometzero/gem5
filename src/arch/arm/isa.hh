@@ -121,6 +121,13 @@ class ISA : public BaseISA
     BaseISADevice &getGICv3CPUInterface();
     BaseISADevice *getGICv3CPUInterface(ThreadContext *tc);
 
+    RegVal pmsaBar[64] = {};
+    RegVal pmsaLar[64] = {};
+    RegVal pmsaSel[2] = {};
+    RegVal pmsaTcm[2] = {};
+    RegVal readPmsaReg(RegIndex idx) const;
+    void writePmsaReg(RegIndex idx, RegVal val);
+
     RegVal miscRegs[NUM_MISCREGS];
     const RegId *intRegMap;
 
@@ -135,6 +142,10 @@ class ISA : public BaseISA
 
   public:
     void clear() override;
+
+    bool pmsaEnabled() const;
+    Fault translatePmsa(const RequestPtr &req, BaseMMU::Mode mode,
+                        bool privileged, SCTLR sctlr);
 
   protected:
     void addressTranslation(MMU::ArmTranslationType tran_type,

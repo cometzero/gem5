@@ -90,6 +90,9 @@ RegClass floatRegClass(FloatRegClass, FloatRegClassName, 0, debug::FloatRegs);
 ISA::ISA(const Params &p) : BaseISA(p, "arm"), system(NULL),
     _decoderFlavor(p.decoderFlavor), pmu(p.pmu), impdefAsNop(p.impdef_nop)
 {
+    fatal_if(p.pmsa64 && (!p.pmsa_regions || p.pmsa_regions > 32),
+             "PMSA region count must be 1..32");
+    fatal_if(p.pmsa_tcm_wait > 3, "TCM wait states must be 0..3");
     fatal_if(p.cache_id_registers_enabled && p.ccsidr.size() != 14,
              "Explicit cache ID registers require 14 CCSIDR entries");
     fatal_if(p.cache_id_registers_enabled && bits(p.id_aa64mmfr2_el1, 23, 20),
@@ -135,6 +138,8 @@ ISA::ISA(const Params &p) : BaseISA(p, "arm"), system(NULL),
         release = p.release_se;
     }
 
+    fatal_if(p.pmsa64 && (!FullSystem || !highestELIs64 || highestEL != EL2),
+             "Experimental PMSA requires an AArch64 full system without EL3");
     selfDebug = new SelfDebug();
     initializeMiscRegMetadata();
     preUnflattenMiscReg();
@@ -154,6 +159,21 @@ ISA::clear()
         miscRegs[idx] = lookUpMiscReg[idx].reset();
     }
 
+    std::fill(std::begin(pmsaBar), std::end(pmsaBar), 0);
+    std::fill(std::begin(pmsaLar), std::end(pmsaLar), 0);
+    std::fill(std::begin(pmsaSel), std::end(pmsaSel), 0);
+    for (unsigned i = 0; i < 2; ++i) {
+        const auto &range = i ? params().pmsa_dtcm : params().pmsa_itcm;
+        pmsaTcm[i] = 0;
+        if (range.size()) {
+            fatal_if(range.size() < 16384 || range.size() > 1048576 ||
+                         !isPowerOf2(range.size()) ||
+                         (range.start() & (range.size() - 1)),
+                     "TCM must be aligned power of two, 16KiB..1MiB");
+            pmsaTcm[i] = range.start() | ((floorLog2(range.size()) - 9) << 2) |
+                         (params().pmsa_tcm_wait << 8);
+        }
+    }
     updateRegMap(miscRegs[MISCREG_CPSR]);
 }
 
@@ -206,6 +226,19 @@ ISA::copyRegsFrom(ThreadContext *src)
 
     for (int i = 0; i < NUM_MISCREGS; i++)
         tc->setMiscRegNoEffect(i, src->readMiscRegNoEffect(i));
+
+    if (params().pmsa64) {
+        const auto *other = static_cast<const ISA *>(src->getIsaPtr());
+        fatal_if(!other->pmsaEnabled(), "Cannot copy VMSA state into PMSA");
+        std::copy(std::begin(other->pmsaBar), std::end(other->pmsaBar),
+                  pmsaBar);
+        std::copy(std::begin(other->pmsaLar), std::end(other->pmsaLar),
+                  pmsaLar);
+        std::copy(std::begin(other->pmsaSel), std::end(other->pmsaSel),
+                  pmsaSel);
+        std::copy(std::begin(other->pmsaTcm), std::end(other->pmsaTcm),
+                  pmsaTcm);
+    }
 
     ArmISA::VecRegContainer vc;
     for (auto &id: vecRegClass) {
@@ -438,6 +471,9 @@ RegVal
 ISA::readMiscRegNoEffect(RegIndex idx) const
 {
     assert(idx < NUM_MISCREGS);
+    if (idx >= MISCREG_MPUIR_EL1 && idx <= MISCREG_IMP_DTCMREGIONR_EL1) {
+        return readPmsaReg(idx);
+    }
 
     const auto &reg = lookUpMiscReg[idx]; // bit masks
     const auto &map = getMiscIndices(idx);
@@ -461,6 +497,12 @@ ISA::readMiscRegNoEffect(RegIndex idx) const
 RegVal
 ISA::readMiscReg(RegIndex idx)
 {
+    // MRS operands may be read before its access check. A-profile access
+    // to these R-profile encodings must fault, not panic in this helper.
+    if (idx >= MISCREG_MPUIR_EL1 && idx <= MISCREG_IMP_DTCMREGIONR_EL1 &&
+        !params().pmsa64) {
+        return 0;
+    }
     CPSR cpsr = 0;
     SCR scr = 0;
 
@@ -755,6 +797,11 @@ ISA::readMiscReg(RegIndex idx)
 void
 ISA::setMiscRegNoEffect(RegIndex idx, RegVal val)
 {
+    if (idx >= MISCREG_MPUIR_EL1 && idx <= MISCREG_IMP_DTCMREGIONR_EL1) {
+        writePmsaReg(idx, val);
+        return;
+    }
+
     assert(idx < NUM_MISCREGS);
 
     const auto &reg = lookUpMiscReg[idx]; // bit masks
@@ -1772,6 +1819,12 @@ ISA::serialize(CheckpointOut &cp) const
 
     DPRINTF(Checkpoint, "Serializing Arm Misc Registers\n");
     SERIALIZE_MAPPING(miscRegs, miscRegName, NUM_PHYS_MISCREGS);
+    if (params().pmsa64) {
+        SERIALIZE_ARRAY(pmsaBar, 64);
+        SERIALIZE_ARRAY(pmsaLar, 64);
+        SERIALIZE_ARRAY(pmsaSel, 2);
+        SERIALIZE_ARRAY(pmsaTcm, 2);
+    }
 }
 
 void
@@ -1779,6 +1832,12 @@ ISA::unserialize(CheckpointIn &cp)
 {
     DPRINTF(Checkpoint, "Unserializing Arm Misc Registers\n");
     UNSERIALIZE_MAPPING(miscRegs, miscRegName, NUM_PHYS_MISCREGS);
+    if (params().pmsa64) {
+        UNSERIALIZE_ARRAY(pmsaBar, 64);
+        UNSERIALIZE_ARRAY(pmsaLar, 64);
+        UNSERIALIZE_ARRAY(pmsaSel, 2);
+        UNSERIALIZE_ARRAY(pmsaTcm, 2);
+    }
 
     for (auto idx = 0; idx < NUM_MISCREGS; idx++) {
         if (!lookUpMiscReg[idx].info[MISCREG_UNSERIALIZE] &&

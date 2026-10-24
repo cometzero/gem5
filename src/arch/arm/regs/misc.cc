@@ -887,6 +887,10 @@ Fault
 checkFaultAccessAArch64SysReg(MiscRegIndex reg, CPSR cpsr,
                               ThreadContext *tc, const MiscRegOp64 &inst)
 {
+    if (reg >= MISCREG_MPUIR_EL1 && reg <= MISCREG_IMP_DTCMREGIONR_EL1 &&
+        !static_cast<ISA *>(tc->getIsaPtr())->pmsaEnabled()) {
+        return inst.undefined();
+    }
     return lookUpMiscReg[reg].checkFault(tc, inst, currEL(cpsr));
 }
 
@@ -1959,6 +1963,16 @@ std::unordered_map<MiscRegNum64, MiscRegIndex> miscRegNumToIdx{
     { MiscRegNum64(3, 1, 15, 2, 2), MISCREG_CPUMERRSR_EL1 },
     { MiscRegNum64(3, 1, 15, 2, 3), MISCREG_L2MERRSR_EL1 },
     { MiscRegNum64(3, 1, 15, 3, 0), MISCREG_CBAR_EL1 },
+    { MiscRegNum64(3, 0, 0, 0, 4), MISCREG_MPUIR_EL1 },
+    { MiscRegNum64(3, 0, 6, 2, 1), MISCREG_PRSELR_EL1 },
+    { MiscRegNum64(3, 0, 6, 8, 0), MISCREG_PRBAR_EL1 },
+    { MiscRegNum64(3, 0, 6, 8, 1), MISCREG_PRLAR_EL1 },
+    { MiscRegNum64(3, 0, 6, 1, 1), MISCREG_PRENR_EL1 },
+    { MiscRegNum64(3, 4, 0, 0, 4), MISCREG_MPUIR_EL2 },
+    { MiscRegNum64(3, 4, 6, 2, 1), MISCREG_PRSELR_EL2 },
+    { MiscRegNum64(3, 4, 6, 8, 0), MISCREG_PRBAR_EL2 },
+    { MiscRegNum64(3, 4, 6, 8, 1), MISCREG_PRLAR_EL2 },
+    { MiscRegNum64(3, 4, 6, 1, 1), MISCREG_PRENR_EL2 },
     { MiscRegNum64(3, 2, 0, 0, 0), MISCREG_CSSELR_EL1 },
     { MiscRegNum64(3, 3, 0, 0, 1), MISCREG_CTR_EL0 },
     { MiscRegNum64(3, 3, 0, 0, 7), MISCREG_DCZID_EL0 },
@@ -3743,9 +3757,23 @@ decodeAArch64SysReg(unsigned op0, unsigned op1,
 MiscRegIndex
 decodeAArch64SysReg(const MiscRegNum64 &sys_reg)
 {
+    // R82AE TCM registers alias the A-profile IL1DATA encodings. Select
+    // them only in this opt-in profile; never replace the A-profile map.
+    if (lookUpMiscReg[MISCREG_IMP_ITCMREGIONR_EL1].info[MISCREG_IMPLEMENTED] &&
+        sys_reg.op0 == 3 && sys_reg.op1 == 0 && sys_reg.crn == 15 &&
+        sys_reg.crm == 0 && (sys_reg.op2 == 1 || sys_reg.op2 == 2)) {
+        return sys_reg.op2 == 1 ? MISCREG_IMP_ITCMREGIONR_EL1
+                                : MISCREG_IMP_DTCMREGIONR_EL1;
+    }
     auto it = miscRegNumToIdx.find(sys_reg);
     if (it != miscRegNumToIdx.end()) {
-        return it->second;
+        const auto reg = it->second;
+        if (reg >= MISCREG_MPUIR_EL1 && reg <= MISCREG_IMP_DTCMREGIONR_EL1 &&
+            !lookUpMiscReg[reg].info[MISCREG_IMPLEMENTED]) {
+            // Preserve the original A-profile decode, including impdef_nop.
+            return sys_reg.crn == 15 ? MISCREG_IMPDEF_UNIMPL : MISCREG_UNKNOWN;
+        }
+        return reg;
     } else {
         // Check for a pseudo register before returning MISCREG_UNKNOWN
         if ((sys_reg.op0 == 1 || sys_reg.op0 == 3) &&
@@ -3760,6 +3788,11 @@ decodeAArch64SysReg(const MiscRegNum64 &sys_reg)
 std::optional<MiscRegNum64>
 encodeAArch64SysReg(MiscRegIndex misc_reg)
 {
+    if (misc_reg == MISCREG_IMP_ITCMREGIONR_EL1 ||
+        misc_reg == MISCREG_IMP_DTCMREGIONR_EL1) {
+        return MiscRegNum64(3, 0, 15, 0,
+                            misc_reg == MISCREG_IMP_ITCMREGIONR_EL1 ? 1 : 2);
+    }
     if (auto it = idxToMiscRegNum.find(misc_reg);
         it != idxToMiscRegNum.end()) {
         return it->second;
@@ -3832,6 +3865,10 @@ ISA::initializeMiscRegMetadata()
     // the MiscReg metadata tables are shared across all instances of the
     // ISA object, so there's no need to initialize them multiple times.
     static bool completed = false;
+    static const bool initialPmsa = params().pmsa64;
+    fatal_if(completed && initialPmsa != params().pmsa64,
+             "PMSA and VMSA ArmISA instances cannot share sysreg metadata; "
+             "use separate simulator processes");
     if (completed)
         return;
 
@@ -5686,10 +5723,11 @@ ISA::initializeMiscRegMetadata()
     InitReg(MISCREG_ID_AA64PFR0_EL1)
       .reset([this,release=release,tc=tc](){
           AA64PFR0 pfr0_el1 = 0;
-          pfr0_el1.el0 = 0x2;
-          pfr0_el1.el1 = 0x2;
+          const unsigned el_width = params().pmsa64 ? 0x1 : 0x2;
+          pfr0_el1.el0 = el_width;
+          pfr0_el1.el1 = el_width;
           pfr0_el1.el2 = release->has(ArmExtension::VIRTUALIZATION)
-                                  ? 0x2 : 0x0;
+                                  ? el_width : 0x0;
           pfr0_el1.el3 = release->has(ArmExtension::SECURITY) ? 0x2 : 0x0;
           pfr0_el1.fp = release->has(ArmExtension::FEAT_FP16) ? 0x1 : 0x0;
           pfr0_el1.advsimd = release->has(ArmExtension::FEAT_FP16) ? 0x1 : 0x0;
@@ -5918,6 +5956,37 @@ ISA::initializeMiscRegMetadata()
       .faultWrite(EL1, faultPauthEL1<false, &HFGTR::apibKey>)
       .fault(EL2, faultPauthEL2)
       .allPrivileges().exceptUserMode();
+
+    // Opt-in PMSAv8-64 subset. No register silently succeeds in A-profile.
+    InitReg(MISCREG_MPUIR_EL1).implemented(params().pmsa64)
+        .allPrivileges().exceptUserMode().writes(0)
+        .faultRead(EL1, faultHcrEL1<&HCR::tid1>);
+    for (auto reg : {MISCREG_PRSELR_EL1, MISCREG_PRBAR_EL1,
+                    MISCREG_PRLAR_EL1, MISCREG_PRENR_EL1}) {
+        InitReg(reg).implemented(params().pmsa64)
+            .allPrivileges().exceptUserMode()
+            .faultRead(EL1, faultHcrEL1<&HCR::trvm>)
+            .faultWrite(EL1, faultHcrEL1<&HCR::tvm>);
+    }
+    for (auto reg : {MISCREG_IMP_ITCMREGIONR_EL1,
+                    MISCREG_IMP_DTCMREGIONR_EL1}) {
+        InitReg(reg).implemented(params().pmsa64)
+            .allPrivileges().exceptUserMode()
+            .faultRead(EL1, faultHcrEL1<&HCR::tidcp>)
+            .faultWrite(EL1, [](const MiscRegLUTEntry &entry,
+                ThreadContext *tc, const MiscRegOp64 &inst) -> Fault {
+                const HCR hcr = tc->readMiscRegNoEffect(MISCREG_HCR_EL2);
+                const auto actlr = tc->readMiscRegNoEffect(MISCREG_ACTLR_EL2);
+                if (hcr.tidcp || !(actlr & 1))
+                    return inst.generateTrap(EL2);
+                return NoFault;
+            });
+    }
+    for (auto reg : {MISCREG_MPUIR_EL2, MISCREG_PRSELR_EL2,
+                    MISCREG_PRBAR_EL2, MISCREG_PRLAR_EL2,
+                    MISCREG_PRENR_EL2}) {
+        InitReg(reg).implemented(params().pmsa64).hyp();
+    }
 
     InitReg(MISCREG_CCSIDR_EL1)
       .faultRead(EL0, faultIdst)
@@ -6979,13 +7048,19 @@ ISA::initializeMiscRegMetadata()
       .res0(0xffffffff00000000)
       .mapsTo(MISCREG_CNTHP_TVAL);
     InitReg(MISCREG_CNTHPS_CTL_EL2)
+      .hypNonSecureRead(params().pmsa64)
+      .hypNonSecureWrite(params().pmsa64)
       .mon(sel2_implemented)
       .hypSecure(sel2_implemented)
       .res0(0xfffffffffffffff8);
     InitReg(MISCREG_CNTHPS_CVAL_EL2)
+      .hypNonSecureRead(params().pmsa64)
+      .hypNonSecureWrite(params().pmsa64)
       .mon(sel2_implemented)
       .hypSecure(sel2_implemented);
     InitReg(MISCREG_CNTHPS_TVAL_EL2)
+      .hypNonSecureRead(params().pmsa64)
+      .hypNonSecureWrite(params().pmsa64)
       .mon(sel2_implemented)
       .hypSecure(sel2_implemented)
       .res0(0xffffffff00000000);
