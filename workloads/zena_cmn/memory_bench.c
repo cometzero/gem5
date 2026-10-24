@@ -14,8 +14,18 @@ static int initialize_before_switch, channel_phase_spread;
 static pthread_barrier_t barrier;
 static double *a, *b, *c;
 static size_t elements;
-static size_t worker_stride;
-static double sums[16];
+static size_t worker_begin[16], worker_end[16];
+static double sums[16], warmup_sums[16];
+
+static void
+complete_memory(void)
+{
+#if defined(__aarch64__)
+    __asm__ volatile("dsb sy" : : : "memory");
+#else
+    __sync_synchronize();
+#endif
+}
 
 static __attribute__((noinline)) double
 neon_read(size_t begin, size_t end)
@@ -54,8 +64,8 @@ neon_read(size_t begin, size_t end)
 static double
 kernel(unsigned id)
 {
-    size_t begin = worker_stride * id;
-    size_t end = begin + elements / workers;
+    size_t begin = worker_begin[id];
+    size_t end = worker_end[id];
     double sum = 0;
     if (!strcmp(kernel_name, "neon")) {
         return neon_read(begin, end);
@@ -85,12 +95,13 @@ run(void *arg)
         /* All workers must exist and be pinned before the global switch. */
         sync_workers(&barrier);
         if (!id) {
+            complete_memory();
             marker_begin(UINT64_C(0x5a535743));
         }
         sync_workers(&barrier);
     }
-    size_t begin = worker_stride * id;
-    size_t end = begin + elements / workers;
+    size_t begin = worker_begin[id];
+    size_t end = worker_end[id];
     for (size_t j = begin; !initialize_before_switch && j < end; ++j) {
         a[j] = 1.0;
         if (b) {
@@ -100,20 +111,31 @@ run(void *arg)
             c[j] = 3.0;
         }
     }
-    (void)kernel(id);
+    /* Check the read warmup sum so the compiler must retain its loads. */
+    warmup_sums[id] = kernel(id);
+    complete_memory();
     sync_workers(&barrier);
     if (!id) {
+        complete_memory();
         marker_begin(0);
+        complete_memory();
     }
     sync_workers(&barrier);
     for (unsigned p = 0; p < passes; ++p) {
         sums[id] += kernel(id);
+        if (p + 1 == passes) {
+            complete_memory();
+        }
         /* Prevent repeated stores from collapsing across passes. */
         sync_workers(&barrier);
     }
     if (!id) {
+        complete_memory();
         marker_end();
+        complete_memory();
     }
+    /* Keep other workers' thread teardown outside the measured interval. */
+    sync_workers(&barrier);
     return NULL;
 }
 int
@@ -138,7 +160,7 @@ main(int argc, char **argv)
             mode = argv[++i];
         } else {
             fprintf(stderr,
-                    "usage: %s [--host] [--workers 1|4|8|16] "
+                    "usage: %s [--host] [--workers 1|4|8|16 (12 with --host)] "
                     "[--passes 1|2|4|8] [--mode read|copy|stream] "
                     "[--kernel scalar|neon] [--array-mib N] "
                     "[--initialize-before-switch] [--channel-phase-spread]\n",
@@ -146,7 +168,8 @@ main(int argc, char **argv)
             return 2;
         }
     }
-    if ((workers != 1 && workers != 4 && workers != 8 && workers != 16) ||
+    if ((workers != 1 && workers != 4 && workers != 8 && workers != 16 &&
+         !(host && workers == 12)) ||
         (passes != 1 && passes != 2 && passes != 4 && passes != 8) ||
         (strcmp(mode, "read") && strcmp(mode, "copy") &&
          strcmp(mode, "stream"))) {
@@ -163,6 +186,7 @@ main(int argc, char **argv)
     }
 #endif
     if (!initialize_before_switch) {
+        complete_memory();
         marker_begin(UINT64_C(0x5a535743));
     }
     size_t bytes =
@@ -171,7 +195,12 @@ main(int argc, char **argv)
     unsigned arrays =
         !strcmp(mode, "read") ? 1 : (!strcmp(mode, "copy") ? 2 : 3);
     elements = bytes / sizeof(double);
-    worker_stride = elements / workers + (channel_phase_spread ? 8 : 0);
+    for (unsigned i = 0; i < workers; ++i) {
+        /* Divide whole NEON iterations without dropping a 12-worker tail. */
+        size_t phase = channel_phase_spread ? i * 8 : 0;
+        worker_begin[i] = (elements / 16 * i / workers) * 16 + phase;
+        worker_end[i] = (elements / 16 * (i + 1) / workers) * 16 + phase;
+    }
     size_t allocated_bytes = bytes + (channel_phase_spread ? workers * 64 : 0);
     a = aligned_alloc(64, allocated_bytes);
     b = arrays > 1 ? aligned_alloc(64, bytes) : NULL;
@@ -189,15 +218,16 @@ main(int argc, char **argv)
                 c[j] = 3.0;
             }
         }
+        complete_memory();
         puts("CMN_PROGRESS atomic_initialization_complete");
         fflush(stdout);
     }
     if (channel_phase_spread) {
-        /* Channel bits 6..9 are page-offset bits; bank bits are not inferred.
-         */
+        /* This phase step selects successive channels only at 64B stripes. */
         for (unsigned i = 0; i < workers; ++i) {
             printf("CMN_LAYOUT worker=%u begin=%p bytes=%zu\n", i,
-                   (void *)(a + i * worker_stride), bytes / workers);
+                   (void *)(a + worker_begin[i]),
+                   (worker_end[i] - worker_begin[i]) * sizeof(double));
         }
         fflush(stdout);
     }
@@ -209,16 +239,23 @@ main(int argc, char **argv)
         spawn(&threads[i], run, i);
     }
     for (unsigned i = 0; i < workers; ++i) {
-        pthread_join(threads[i], NULL);
+        int rc = pthread_join(threads[i], NULL);
+        if (rc) {
+            errno = rc;
+            die("pthread_join");
+        }
     }
     int ok = 1;
-    double checksum = 0;
+    double checksum = 0, warmup_checksum = 0;
     for (unsigned i = 0; i < workers; ++i) {
         checksum += sums[i];
+        warmup_checksum += warmup_sums[i];
     }
     if (!strcmp(mode, "read")) {
         for (unsigned i = 0; i < workers; ++i) {
-            ok &= sums[i] == (double)(elements / workers) * passes;
+            size_t count = worker_end[i] - worker_begin[i];
+            ok &= sums[i] == (double)count * passes;
+            ok &= warmup_sums[i] == (double)count;
         }
     } else {
         for (size_t j = 0; j < elements; ++j) {
@@ -228,15 +265,17 @@ main(int argc, char **argv)
     printf("CMN_RESULT {\"benchmark\":\"%s\",\"result\":\"%s\","
            "\"workers\":%u,\"passes\":%u,\"working_set_bytes\":%zu,"
            "\"useful_bytes\":%zu,\"warmup_passes\":1,"
-           "\"checksum\":%.0f,\"kernel\":\"%s\",\"initialization_before_"
+           "\"checksum\":%.0f,\"warmup_checksum\":%.0f,\"kernel\":\"%s\","
+           "\"initialization_before_"
            "switch\":%s,"
            "\"channel_phase_spread\":%s,\"allocated_bytes\":%zu,"
-           "\"first_touch\":\"%s\",\"affinity\":\"0..workers-1\"}\n",
+           "\"first_touch\":\"%s\",\"affinity\":\"%s\"}\n",
            mode, ok ? "PASS" : "FAIL", workers, passes, bytes * arrays,
-           bytes * arrays * passes, checksum, kernel_name,
+           bytes * arrays * passes, checksum, warmup_checksum, kernel_name,
            initialize_before_switch ? "true" : "false",
            channel_phase_spread ? "true" : "false", allocated_bytes * arrays,
-           initialize_before_switch ? "main-before-switch" : "pinned-worker");
+           initialize_before_switch ? "main-before-switch" : "pinned-worker",
+           host ? "first-available-workers" : "0..workers-1");
     free(a);
     free(b);
     free(c);

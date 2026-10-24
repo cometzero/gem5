@@ -13,8 +13,12 @@ build/gem5-cmn/guest-host/memory_bench --host --mode read --workers 4 --passes 2
 AArch64 builds use static C11/pthreads, `-O2 -march=armv8-a
 -mno-outline-atomics`; atomic fetch-add uses LL/SC, with no LSE requirement.
 `build-manifest.txt` records compiler, flags, source and binary SHA-256.
-`--host` disables m5 instructions and maps worker IDs onto available host CPUs;
-this only tests C logic, not modeled coherence or Arm weak ordering.
+`--host` disables m5 instructions and maps worker IDs onto available host CPUs.
+For ROI ID 0 it measures `CLOCK_MONOTONIC_RAW` elapsed time and emits
+`CMN_HOST_ROI` JSON with `host:true` and `elapsed_ns`. Switch and nonzero ROI
+markers do not start this timer. Printing occurs after the end timestamp.
+Native execution measures that host's workload time; QEMU user-mode execution
+only checks C logic. Neither establishes modeled coherence or Arm weak ordering.
 
 By default the guest emits switch marker `work_begin(0x5a535743, 0)` before
 allocation, first-touch and warm-up. For the coherency test only,
@@ -58,13 +62,46 @@ dump and Atomic-to-O3 switching. Workload code never flushes/invalidates caches.
   this tests visibility after successful Linux calls,
   not deliberate permission faults or a userspace TLB invalidation opcode.
 
-`memory_bench --mode read|copy|stream --workers 1|4|8|16 --passes 2|4|8`
+`memory_bench --mode read|copy|stream --workers 1|4|8|16 --passes 1|2|4|8`
 keeps aggregate arrays fixed: read 256 MiB; copy two 128 MiB arrays; stream
 three 128 MiB arrays. `stream` is the STREAM Triad operation (`a=b+3*c`),
 not the upstream STREAM package or an official STREAM result. Each pinned
 worker initializes and warms its partition; ROI includes a barrier per pass.
 Allocation failure does not silently shrink arrays. Read accumulates doubles
 and therefore includes a dependency-chain cost; it is not a peak LSU test.
+
+Apollo's `gem5-apollo-guest` Yocto recipe installs this program as
+`/usr/bin/apollo-memory-bench`. `--array-mib 64 --workers 16 --mode read
+--kernel neon --passes 1 --initialize-before-switch` uses one 64 MiB array
+split into sixteen disjoint 4 MiB partitions. Atomic initializes the array;
+each pinned worker performs one O3 warmup pass before the measured pass. The
+read warmup sum is checked and reported as `warmup_checksum`, preventing its
+loads from being optimized away. Per-worker `DSB SY` completes warmup and
+final measured accesses before the collective ROI boundaries. A post-ROI
+barrier prevents worker teardown from starting before the end marker. These
+barriers do not flush dirty cache lines to DRAM.
+
+For a 12-core hardware board, `--host --workers 12` is also supported. The
+fixed total array is split in whole 16-double NEON iterations; unequal worker
+partitions cover every element exactly once. Other supported worker counts
+keep their equal partitions. The default worker count remains 16, and gem5
+mode still accepts only 1/4/8/16. On a 12-core board, for example:
+
+```sh
+./memory_bench --host --workers 12 --mode read --kernel neon \
+  --array-mib 64 --passes 1 --initialize-before-switch
+```
+
+The host timer uses the same collective ROI boundaries as gem5 and excludes
+allocation, initialization and warmup. Divide `useful_bytes` by the emitted
+`elapsed_ns` for decimal GB/s. Pinning follows the process's allowed CPU set;
+`affinity:first-available-workers` records this host-mode policy. CPU clocks,
+prefetchers, physical channel mapping and cache topology remain hardware
+properties and need separate capture for comparisons.
+
+`--channel-phase-spread` adds a 64-byte offset between worker partitions;
+this selects successive channels only for a 64-byte interleave. Leave it off
+when comparing 64-, 512- and 1024-byte interleave with identical placement.
 
 Useful bytes/pass are 256 MiB for read/copy and 384 MiB for Triad, counting
 both input and output for copy/Triad. DRAM bytes can differ due to writeback,

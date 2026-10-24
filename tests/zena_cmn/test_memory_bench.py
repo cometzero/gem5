@@ -79,6 +79,7 @@ class MemoryBench(unittest.TestCase):
                         )
                     )
                     self.assertEqual(result["checksum"], 131072)
+                    self.assertEqual(result["warmup_checksum"], 131072)
                     self.assertEqual(result["result"], "PASS")
                     self.assertEqual(result["working_set_bytes"], 1048576)
                     self.assertEqual(result["warmup_passes"], 1)
@@ -96,6 +97,7 @@ class MemoryBench(unittest.TestCase):
         self.assertEqual(result["kernel"], "scalar")
         self.assertEqual(result["passes"], 2)
         self.assertEqual(result["checksum"], 262144)
+        self.assertEqual(result["warmup_checksum"], 131072)
         self.assertFalse(result["initialization_before_switch"])
         self.assertEqual(result["first_touch"], "pinned-worker")
         self.assertFalse(result["channel_phase_spread"])
@@ -131,6 +133,7 @@ class MemoryBench(unittest.TestCase):
                             )
                         )
                         self.assertEqual(result["checksum"], 262144)
+                        self.assertEqual(result["warmup_checksum"], 131072)
                         self.assertEqual(result["useful_bytes"], 2097152)
                         self.assertEqual(
                             result["allocated_bytes"], 1048576 + 64 * workers
@@ -157,6 +160,148 @@ class MemoryBench(unittest.TestCase):
         ):
             with self.subTest(args=args):
                 self.assertEqual(self.run_guest(*args).returncode, 2)
+
+    def test_sixteen_worker_writes(self):
+        for mode, arrays in (("copy", 2), ("stream", 3)):
+            for atomic in (False, True):
+                with self.subTest(mode=mode, atomic=atomic):
+                    args = [
+                        "--workers",
+                        "16",
+                        "--array-mib",
+                        "1",
+                        "--passes",
+                        "2",
+                        "--mode",
+                        mode,
+                    ]
+                    if atomic:
+                        args.append("--initialize-before-switch")
+                    run = self.run_guest(*args)
+                    self.assertEqual(run.returncode, 0, run.stderr)
+                    result = json.loads(
+                        next(
+                            line[11:]
+                            for line in run.stdout.splitlines()
+                            if line.startswith("CMN_RESULT ")
+                        )
+                    )
+                    self.assertEqual(result["result"], "PASS")
+                    self.assertEqual(result["workers"], 16)
+                    self.assertEqual(result["useful_bytes"], 2097152 * arrays)
+
+    def test_twelve_host_workers_cover_uneven_partitions(self):
+        for mode, kernel, arrays in (
+            ("read", "scalar", 1),
+            ("read", "neon", 1),
+            ("copy", "scalar", 2),
+            ("stream", "scalar", 3),
+        ):
+            for atomic in (False, True):
+                with self.subTest(mode=mode, kernel=kernel, atomic=atomic):
+                    args = [
+                        "--workers",
+                        "12",
+                        "--array-mib",
+                        "1",
+                        "--passes",
+                        "2",
+                        "--mode",
+                        mode,
+                        "--kernel",
+                        kernel,
+                    ]
+                    if atomic:
+                        args.append("--initialize-before-switch")
+                    run = self.run_guest(*args)
+                    self.assertEqual(run.returncode, 0, run.stderr)
+                    result = json.loads(
+                        next(
+                            line[11:]
+                            for line in run.stdout.splitlines()
+                            if line.startswith("CMN_RESULT ")
+                        )
+                    )
+                    self.assertEqual(result["result"], "PASS")
+                    self.assertEqual(result["workers"], 12)
+                    self.assertEqual(
+                        result["working_set_bytes"], 1048576 * arrays
+                    )
+                    self.assertEqual(result["useful_bytes"], 2097152 * arrays)
+                    self.assertEqual(
+                        result["affinity"], "first-available-workers"
+                    )
+                    if mode == "read":
+                        self.assertEqual(result["checksum"], 262144)
+                        self.assertEqual(result["warmup_checksum"], 131072)
+                    times = [
+                        json.loads(line[13:])
+                        for line in run.stdout.splitlines()
+                        if line.startswith("CMN_HOST_ROI ")
+                    ]
+                    self.assertEqual(len(times), 1)
+                    self.assertTrue(times[0]["host"])
+                    self.assertEqual(times[0]["clock"], "CLOCK_MONOTONIC_RAW")
+                    self.assertGreater(times[0]["elapsed_ns"], 0)
+        run = subprocess.run(
+            ["qemu-aarch64-static", str(self.binary), "--workers", "12"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(run.returncode, 2)
+
+    def test_host_timer_ignores_nonzero_markers(self):
+        source = Path(self.directory.name) / "markers.c"
+        source.write_text(
+            """#define _GNU_SOURCE
+#include "common.h"
+int main(void) {
+    (void)number; (void)pin; (void)sync_workers; (void)spawn;
+    host = 1;
+    marker_begin(UINT64_C(0x5a535743));
+    marker_end();
+    marker_begin(101);
+    marker_end();
+    marker_begin(0);
+    usleep(1000);
+    marker_end();
+    marker_end();
+    return 0;
+}
+"""
+        )
+        binary = source.with_suffix("")
+        subprocess.run(
+            [
+                "aarch64-linux-gnu-gcc",
+                "-std=c11",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-static",
+                "-pthread",
+                "-I",
+                str(SOURCE.parent),
+                str(source),
+                "-o",
+                str(binary),
+            ],
+            check=True,
+        )
+        run = subprocess.run(
+            ["qemu-aarch64-static", str(binary)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        lines = run.stdout.splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("CMN_HOST_ROI "))
+        result = json.loads(lines[0][13:])
+        self.assertGreaterEqual(result["elapsed_ns"], 1000000)
 
 
 if __name__ == "__main__":

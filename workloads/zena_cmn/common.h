@@ -2,15 +2,19 @@
 #ifndef ZENA_CMN_COMMON_H
 #define ZENA_CMN_COMMON_H
 #include <errno.h>
+#include <inttypes.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static int host;
+static int host_roi_active;
+static struct timespec host_roi_start;
 static void
 die(const char *message)
 {
@@ -67,6 +71,12 @@ sync_workers(pthread_barrier_t *barrier)
 static void
 marker_begin(uint64_t id)
 {
+    if (host && id == 0) {
+        if (clock_gettime(CLOCK_MONOTONIC_RAW, &host_roi_start)) {
+            die("clock_gettime");
+        }
+        host_roi_active = 1;
+    }
 #if defined(__aarch64__)
     if (!host) {
         register uint64_t x0 __asm__("x0") = id;
@@ -80,6 +90,20 @@ marker_begin(uint64_t id)
 static void
 marker_end(void)
 {
+    if (host && host_roi_active) {
+        struct timespec end;
+        if (clock_gettime(CLOCK_MONOTONIC_RAW, &end)) {
+            die("clock_gettime");
+        }
+        int64_t elapsed = (int64_t)(end.tv_sec - host_roi_start.tv_sec) *
+                              INT64_C(1000000000) +
+                          end.tv_nsec - host_roi_start.tv_nsec;
+        host_roi_active = 0;
+        printf("CMN_HOST_ROI {\"host\":true,"
+               "\"clock\":\"CLOCK_MONOTONIC_RAW\","
+               "\"elapsed_ns\":%" PRId64 "}\n",
+               elapsed);
+    }
 #if defined(__aarch64__)
     if (!host) {
         register uint64_t x0 __asm__("x0") = 0;
