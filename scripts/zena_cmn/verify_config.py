@@ -310,16 +310,61 @@ def verify(config, profile):
             index.get(path, {}).get("clock") == [period_ticks(clock)],
             f"effective clock: {path}",
         )
+    cpu_domains = {i: "system.cpu_clk_domain" for i in range(cores)}
+    scmi = system.get("platform", {}).get("scmi")
+    if scmi is not None:
+        domains = system.get("cluster_clocks", [])
+        voltages = system.get("cluster_voltages", [])
+        handler = system.get("dvfs_handler", {})
+        check(
+            cores in (4, 16)
+            and group == 4
+            and len(domains) == len(voltages) == clusters,
+            "SCMI cluster domain count",
+        )
+        check(
+            handler.get("enable") is True
+            and handler.get("domains") == [d["path"] for d in domains]
+            and handler.get("sys_clk_domain") == "system.clk_domain"
+            and handler.get("transition_latency") == 1200000000
+            and scmi.get("dvfs") == "system.dvfs_handler",
+            "SCMI DVFS handler binding",
+        )
+        check(
+            scmi.get("perf_levels") == [2500, 2000, 1800],
+            "SCMI performance levels",
+        )
+        # These are the explicit synthetic OPPs in power_control.py.
+        for cluster, domain in enumerate(domains):
+            voltage = index.get(domain.get("voltage_domain"), {})
+            check(
+                domain.get("domain_id") == cluster
+                and domain.get("clock") == [400, 500, 556]
+                and domain.get("init_perf_level") == 1
+                and period_ticks(profile["cpu"]["clock"]) == 500,
+                f"SCMI cluster{cluster} OPP contract",
+            )
+            check(
+                cluster < len(voltages)
+                and domain.get("voltage_domain") == voltages[cluster]["path"]
+                and voltage.get("voltage") == [0.95, 0.85, 0.75],
+                f"SCMI cluster{cluster} voltage binding",
+            )
+            for cpu_id in range(cluster * group, (cluster + 1) * group):
+                cpu_domains[cpu_id] = domain["path"]
     for cpu in cpus + system.get("roi_cpu", []):
         check(
-            cpu.get("clk_domain") == "system.cpu_clk_domain",
+            cpu.get("clk_domain") == cpu_domains.get(cpu.get("cpu_id")),
             f"CPU clock binding: {cpu['path']}",
         )
     for obj in index.values():
         if obj["type"] == "CHI_Cache_Controller":
+            private = re.fullmatch(
+                r"system\.cpu(\d+)\.(l1i|l1d|l2)", obj["path"]
+            )
             domain = (
-                "system.cpu_clk_domain"
-                if obj["path"].startswith("system.cpu")
+                cpu_domains.get(int(private[1]))
+                if private
                 else "system.ruby.clk_domain"
             )
             check(

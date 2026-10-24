@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -58,6 +59,11 @@ from zena_css import (
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile")
+    parser.add_argument("--power-control", action="store_true")
+    parser.add_argument("--power-profile", type=file_arg)
+    parser.add_argument("--thermal-profile", type=file_arg)
+    parser.add_argument("--power-interval-us", type=float, default=100.0)
+    parser.add_argument("--temperature-mc", type=int, default=40000)
     parser.add_argument("--roofline", action="store_true")
     parser.add_argument("--roofline-trace", action="store_true")
     parser.add_argument("--cpus", type=int, choices=(4, 8, 16))
@@ -93,6 +99,19 @@ def main():
     args = parser.parse_args()
     if args.max_ticks < 1:
         parser.error("max-ticks must be positive")
+    if bool(args.power_profile) != bool(args.thermal_profile):
+        parser.error(
+            "power-profile and thermal-profile must be supplied together"
+        )
+    if args.power_profile and not args.power_control:
+        parser.error("online power requires --power-control")
+    if (
+        not math.isfinite(args.power_interval_us)
+        or args.power_interval_us <= 0
+    ):
+        parser.error("power-interval-us must be finite and positive")
+    if not -40000 <= args.temperature_mc <= 150000:
+        parser.error("temperature-mc must be -40000..150000")
     base_profile = load_parameters(args.profile)
     overrides = {}
     if args.cpus is not None:
@@ -205,6 +224,20 @@ def main():
             new.workload = old.workload
             new.isa = old.isa
             new.createThreads()
+    if args.power_control:
+        from zena_cmn.power_control import configure_power_control
+
+        configure_power_control(system, params, args.temperature_mc)
+    power_profile = thermal_profile = thermal_names = None
+    if args.power_profile:
+        from zena_cmn.power_runtime import (
+            PowerRuntime,
+            configure_thermal,
+        )
+
+        power_profile = json.loads(Path(args.power_profile).read_text())
+        thermal_profile = json.loads(Path(args.thermal_profile).read_text())
+        thermal_names = configure_thermal(system, thermal_profile)
     # Functional entropy device: descriptor/data accesses use the Ruby-aware
     # system port, but do not model timed DMA traffic.
     system.platform.rng = MmioVirtIO(
@@ -255,6 +288,10 @@ def main():
     add_cache_topology(dtb, params, ZenaCSS.affinity)
     if smmu is not None:
         add_npu_dtb(dtb)
+    if args.power_control:
+        from zena_cmn.power_control import add_power_control_dtb
+
+        add_power_control_dtb(dtb, args.cpus, ZenaCSS.affinity)
     system.workload.dtb_filename = dtb
     (outdir / "resolved-profile.json").write_text(
         json.dumps(params, indent=2) + "\n"
@@ -290,6 +327,23 @@ def main():
             else "NOT_PRESENT"
         ),
         "checkpoint_restore": "DISKLESS_ATOMIC_BOOT_ONLY",
+        "power": {
+            "control": args.power_control,
+            "temperature_mc": args.temperature_mc,
+            "power_profile_sha256": file_digest(args.power_profile),
+            "thermal_profile_sha256": file_digest(args.thermal_profile),
+            "interval_us": args.power_interval_us,
+            "analysis_sha256": (
+                {
+                    name: file_digest(
+                        str(CONFIGS.parent / "scripts/zena_cmn" / name)
+                    )
+                    for name in ("analyze_power.py", "thermal_replay.py")
+                }
+                if args.power_profile
+                else {}
+            ),
+        },
         "restore": args.restore,
         "readfile": args.readfile,
     }
@@ -303,6 +357,7 @@ def main():
         "bootloader_sha256": file_digest(args.bootloader),
         "initrd_sha256": file_digest(args.initrd),
         "command_line": args.command_line,
+        "power": manifest["power"],
     }
     if args.restore and read_metadata(args.restore)["contract"] != contract:
         parser.error("checkpoint boot contract mismatch")
@@ -316,8 +371,36 @@ def main():
         multi_roi=args.roofline,
         trace_roi=args.roofline_trace,
     )
+    if args.power_profile:
+        # Initialize native thermal nodes without advancing guest time.
+        m5.simulate(0)
+    online = (
+        PowerRuntime(
+            system,
+            outdir,
+            power_profile,
+            thermal_profile,
+            m5.ticks.fromSeconds(args.power_interval_us * 1e-6),
+            thermal_names,
+            control,
+        )
+        if args.power_profile
+        else None
+    )
     while m5.curTick() < args.max_ticks:
-        event = m5.simulate(args.max_ticks - m5.curTick())
+        deadline = (
+            min(args.max_ticks, online.next_tick)
+            if online and online.active
+            else args.max_ticks
+        )
+        event = m5.simulate(deadline - m5.curTick())
+        if online:
+            online.boundary()
+        if (
+            event.getCause() == "simulate() limit reached"
+            and m5.curTick() < args.max_ticks
+        ):
+            continue
         if event.getCause() == "checkpoint":
             saved = save_checkpoint(args.checkpoint_dir, control, contract)
             (outdir / "exit.json").write_text(
@@ -339,7 +422,11 @@ def main():
             )
             break
         if control.handle(event.getCause(), event.getCode()):
+            if online and control.phase == "warmup":
+                online.start()
             continue
+        if online:
+            online.finish()
         print(
             f"CMN_EXIT cause={event.getCause()} code={event.getCode()} tick={m5.curTick()}"
         )

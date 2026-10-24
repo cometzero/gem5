@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
 """Summarize one explicitly bounded ROI; never sum repeated stats dumps."""
+
 import argparse
 import json
 import math
@@ -83,6 +84,19 @@ def summarize(stats_text, guest_text, begin_tick, end_tick):
     }
     if any(semantic(block) != semantic(stats) for _, block in candidates[1:]):
         raise ValueError("conflicting dumps at the ROI boundary")
+    return summarize_block(
+        stats, guest_text, begin_tick, end_tick, index, len(candidates) - 1
+    )
+
+
+def summarize_block(
+    stats, guest_text, begin_tick, end_tick, index=None, duplicate_dumps=0
+):
+    """Summarize a selected block or explicitly aggregated additive counters."""
+    if type(begin_tick) is not int or type(end_tick) is not int:
+        raise ValueError("ROI ticks must be integers")
+    if begin_tick < 0 or end_tick <= begin_tick:
+        raise ValueError("ROI end must follow begin")
     frequency = stats.get("simFreq")
     if frequency is None or frequency <= 0:
         raise ValueError("missing positive simFreq")
@@ -162,7 +176,7 @@ def summarize(stats_text, guest_text, begin_tick, end_tick):
             "frequency_hz": frequency,
             "seconds": seconds,
             "stats_block_index": index,
-            "duplicate_dumps_ignored": len(candidates) - 1,
+            "duplicate_dumps_ignored": duplicate_dumps,
         },
         "application": {
             "useful_bytes": useful,

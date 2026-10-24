@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Chanho Park
 # SPDX-License-Identifier: BSD-3-Clause
 """Set ZENA_CMN_RUN to an instantiated FS run for config mutation checks."""
+
 import copy
 import json
 import os
@@ -108,6 +109,92 @@ class RuntimeConfigTest(unittest.TestCase):
         failures = verify(self.config, self.profile)["failures"]
         self.assertIn("NPU stream ID", failures)
         self.assertIn("NPU payload outside CPU Home", failures)
+
+    def test_cpu_clock_binding_rejected(self):
+        for group in ("cpu", "roi_cpu"):
+            if group not in self.original["system"]:
+                continue
+            with self.subTest(group=group):
+                config = copy.deepcopy(self.original)
+                cpu = config["system"][group][0]
+                cpu["clk_domain"] = "system.ruby.clk_domain"
+                self.assertIn(
+                    f"CPU clock binding: {cpu['path']}",
+                    verify(config, self.profile)["failures"],
+                )
+
+    def test_private_cache_clock_binding_rejected(self):
+        system = self.config["system"]
+        cache = system["cpu"][0]["l2"]
+        domains = system.get("cluster_clocks", [])
+        cache["clk_domain"] = (
+            domains[-1]["path"]
+            if len(domains) > 1
+            else "system.ruby.clk_domain"
+        )
+        self.assertIn(
+            f"cache clock binding: {cache['path']}",
+            verify(self.config, self.profile)["failures"],
+        )
+
+    def test_scmi_domain_contract_rejected(self):
+        if "scmi" not in self.original["system"].get("platform", {}):
+            self.skipTest("requires SCMI profile")
+        mutations = (
+            (
+                "cluster_clocks",
+                "clock",
+                [400, 500, 555],
+                "SCMI cluster0 OPP contract",
+            ),
+            (
+                "cluster_clocks",
+                "init_perf_level",
+                0,
+                "SCMI cluster0 OPP contract",
+            ),
+            ("cluster_clocks", "domain_id", 9, "SCMI cluster0 OPP contract"),
+            (
+                "cluster_clocks",
+                "voltage_domain",
+                "system.voltage_domain",
+                "SCMI cluster0 voltage binding",
+            ),
+            (
+                "cluster_voltages",
+                "voltage",
+                [0.95, 0.8, 0.75],
+                "SCMI cluster0 voltage binding",
+            ),
+        )
+        for name, key, value, failure in mutations:
+            with self.subTest(name=name, key=key):
+                config = copy.deepcopy(self.original)
+                config["system"][name][0][key] = value
+                self.assertIn(
+                    failure, verify(config, self.profile)["failures"]
+                )
+        self.config["system"]["dvfs_handler"]["domains"] = []
+        self.assertIn(
+            "SCMI DVFS handler binding",
+            verify(self.config, self.profile)["failures"],
+        )
+        self.config = copy.deepcopy(self.original)
+        self.config["system"]["cluster_clocks"] = []
+        self.assertIn(
+            "SCMI cluster domain count",
+            verify(self.config, self.profile)["failures"],
+        )
+        self.config = copy.deepcopy(self.original)
+        self.config["system"]["platform"]["scmi"]["perf_levels"] = [
+            2500,
+            2000,
+            1700,
+        ]
+        self.assertIn(
+            "SCMI performance levels",
+            verify(self.config, self.profile)["failures"],
+        )
 
     def test_wrong_iq_rejected(self):
         cpu = self.config["system"].get(
