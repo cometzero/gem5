@@ -45,6 +45,18 @@ def save_checkpoint(directory, control, contract):
             "checkpoint requested outside authorized Atomic boot"
         )
     path = Path(directory)
+    platform = getattr(getattr(control, "system", None), "platform", None)
+    scmi = getattr(platform, "scmi", None)
+    if scmi is not None:
+        # The guest must stop thermal/governor requests before its checkpoint
+        # marker. Running the guest here could consume readfile before restore.
+        if not scmi.idle():
+            raise RuntimeError("SCMI channels busy before checkpoint drain")
+        m5.drain()
+        # DMA draining alone does not cover SCMI replies or MHU doorbells.
+        # Keep the native serialize guards as the final authority as well.
+        if not scmi.idle():
+            raise RuntimeError("SCMI channels busy after checkpoint drain")
     # Reserve exclusively: never overwrite a previous or partial checkpoint.
     path.mkdir(parents=True, exist_ok=False)
     m5.checkpoint(str(path))
