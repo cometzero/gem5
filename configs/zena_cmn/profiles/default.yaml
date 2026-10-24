@@ -5,7 +5,7 @@ schema_version: '0.1'
 artifact_kind: design_input_contract_not_native_gem5_config
 model:
     name: zena_cpu_cmn_uncalibrated_proxy
-    gem5_tag: v25.1.0.1
+    gem5_tag: v26.0.0.0
     calibration_status: uncalibrated
     hardware_claim: topology_oriented_approximation_only
 scope:
