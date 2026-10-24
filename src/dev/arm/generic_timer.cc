@@ -37,7 +37,6 @@
 
 #include "dev/arm/generic_timer.hh"
 
-#include <cmath>
 #include <string_view>
 
 #include "arch/arm/page_size.hh"
@@ -145,13 +144,22 @@ SystemCounter::whenValue(uint64_t cur_val, uint64_t target_val) const
 {
     Tick when = curTick();
     if (target_val > cur_val) {
+        const uint64_t distance = target_val - cur_val;
         uint64_t num_cycles =
-            std::ceil((target_val - cur_val) / ((double) _increment));
+            distance / _increment + (distance % _increment != 0);
         // Take into account current cycle remaining ticks
         Tick rem_ticks = _period - (curTick() % _period);
         if (rem_ticks < _period) {
+            if (rem_ticks > MaxTick - when) {
+                return MaxTick;
+            }
             when += rem_ticks;
             num_cycles -= 1;
+        }
+        // A distant compare value (e.g. UINT64_MAX during boot) can be
+        // outside the simulator's Tick range. Never wrap it into the past.
+        if (num_cycles > (MaxTick - when) / _period) {
+            return MaxTick;
         }
         when += num_cycles * _period;
     }
@@ -316,8 +324,10 @@ ArchTimer::updateCounter()
         _control.istatus = 0;
 
         if (scheduleEvents()) {
-            _parent.schedule(_counterLimitReachedEvent,
-                             whenValue(_counterLimit));
+            const Tick when = whenValue(_counterLimit);
+            if (when != MaxTick) {
+                _parent.schedule(_counterLimitReachedEvent, when);
+            }
         }
     }
 }
