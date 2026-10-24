@@ -60,6 +60,14 @@ class MhuDoorbell : public Doorbell
       : Doorbell(p), channel(0)
     {}
 
+    void serialize(CheckpointOut &cp) const override;
+    void unserialize(CheckpointIn &cp) override;
+
+    bool
+    idle() const
+    {
+        return channel == 0;
+    }
     void set(uint32_t val) { update(channel | val); }
     void clear(uint32_t val) { update(channel & ~val); }
 
@@ -148,6 +156,8 @@ class MHU : public BasicPioDevice
     MHU(const MHUParams &p);
 
     AddrRangeList getAddrRanges() const override;
+    void serialize(CheckpointOut &cp) const override;
+    void unserialize(CheckpointIn &cp) override;
 
     Tick read(PacketPtr pkt) override;
     Tick write(PacketPtr pkt) override;

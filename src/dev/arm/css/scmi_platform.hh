@@ -48,6 +48,8 @@ namespace gem5
 {
 
 class Doorbell;
+class DVFSHandler;
+class ThermalDomain;
 
 namespace scmi
 {
@@ -85,6 +87,7 @@ EndBitUnion(MessageHeader)
 
 union Payload
 {
+    uint32_t words[64];
     struct
     {
         int32_t status;
@@ -148,6 +151,7 @@ union Payload
             uint32_t agentId;
             int32_t status;
         };
+        uint32_t discoveredAgentId;
         uint8_t name[Protocol::MAX_STRING_SIZE + 1];
     } baseDiscoverAgent;
 
@@ -232,9 +236,11 @@ class PlatformChannel : public VirtualChannel
     void writeBackMessage(const Message &msg);
     void notifyAgent();
     void clearDoorbell();
+    void releaseChannel();
     void complete();
 
     EventFunctionWrapper clearDoorbellEvent;
+    EventFunctionWrapper releaseChannelEvent;
     EventFunctionWrapper notifyAgentEvent;
     EventFunctionWrapper completeEvent;
 
@@ -271,6 +277,22 @@ class Platform : public Scp
     ~Platform();
 
     void handleMessage(AgentChannel *ch, Message &msg);
+    void dispatchMessage(Message &msg);
+    bool idle() const;
+    void serialize(CheckpointOut &cp) const override;
+    void unserialize(CheckpointIn &cp) override;
+    void setTemperatureMilliC(unsigned id, int64_t value);
+    int64_t getTemperatureMilliC(unsigned id) const;
+    void initState() override;
+
+    DVFSHandler *dvfs;
+    const std::vector<ThermalDomain *> thermalDomains;
+    const std::vector<uint32_t> levels;
+    const std::vector<uint32_t> costs;
+    std::vector<uint32_t> minLevels;
+    std::vector<uint32_t> maxLevels;
+    std::vector<uint32_t> sensorConfig;
+    Tick replyAt = 0;
 
     /** Returns the number of agents in the system */
     uint32_t numAgents() const { return agents.size(); }
@@ -327,6 +349,10 @@ class Platform : public Scp
     ProtocolList protocols;
 
     DmaPort dmaPort;
+    std::vector<int64_t> temperatureMilliC;
+    AgentChannel *replyChannel = nullptr;
+    Message replyMessage;
+    EventFunctionWrapper replyEvent;
 };
 
 } // namespace scmi

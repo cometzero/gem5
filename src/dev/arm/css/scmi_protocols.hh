@@ -109,7 +109,7 @@ class Protocol
  */
 class BaseProtocol : public Protocol
 {
-    static const uint32_t PROTOCOL_VERSION = 0x10000;
+    static const uint32_t PROTOCOL_VERSION = 0x20000;
 
   public:
     explicit BaseProtocol(Platform &_platform);
@@ -151,6 +151,23 @@ class BaseProtocol : public Protocol
     const std::string subvendor;
     const uint32_t implementationVersion;
 
+};
+
+/** Synchronous Performance v3 and temperature Sensor v3 subset. */
+class ControlProtocol : public Protocol
+{
+  public:
+    ControlProtocol(Platform &platform, bool performance)
+        : Protocol(platform), performance(performance)
+    {}
+    void handleMessage(Message &msg) override;
+    void version(Message &msg) override;
+    void attributes(Message &msg) override;
+    void messageAttributes(Message &msg) override;
+
+  private:
+    bool supported(uint32_t command) const;
+    bool performance;
 };
 
 } // namespace scmi

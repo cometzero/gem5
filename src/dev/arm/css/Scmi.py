@@ -37,7 +37,10 @@ from m5.objects.Doorbell import Doorbell
 from m5.objects.Scp import Scp
 from m5.params import *
 from m5.proxy import *
-from m5.SimObject import SimObject
+from m5.SimObject import (
+    PyBindMethod,
+    SimObject,
+)
 from m5.util.fdthelper import *
 
 
@@ -140,6 +143,23 @@ class ScmiPlatform(Scp):
         0,
         "Return value for the Base protocol "
         "DISCOVER_IMPLEMENTATION_VERSION command",
+    )
+
+    cxx_exports = [
+        PyBindMethod("setTemperatureMilliC"),
+        PyBindMethod("getTemperatureMilliC"),
+        PyBindMethod("idle"),
+    ]
+    dvfs = Param.DVFSHandler(NULL, "Optional SCMI Performance backend")
+    thermal_domains = VectorParam.ThermalDomain(
+        [], "Optional native thermal sensors, one per performance domain"
+    )
+    initial_temperature_mc = Param.Int(40000, "Synthetic sensor in milliC")
+    perf_levels = VectorParam.Unsigned(
+        [2500, 2000, 1800], "Performance levels, fastest first"
+    )
+    perf_costs = VectorParam.Unsigned(
+        [1116, 715, 501], "Abstract SCMI policy costs, not milliwatts"
     )
 
     def generateDeviceTree(self, state):

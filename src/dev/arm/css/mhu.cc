@@ -243,4 +243,30 @@ Ap2ScpDoorbell::clearInterrupt()
     scp->clearInterrupt(this);
 }
 
+void
+MhuDoorbell::serialize(CheckpointOut &cp) const
+{
+    fatal_if(channel, "MHU checkpoint requires idle doorbells");
+    SERIALIZE_SCALAR(channel);
+}
+
+void
+MhuDoorbell::unserialize(CheckpointIn &cp)
+{
+    UNSERIALIZE_SCALAR(channel);
+    fatal_if(channel, "Only idle MHU checkpoints are supported");
+}
+
+void
+MHU::serialize(CheckpointOut &cp) const
+{
+    SERIALIZE_SCALAR(scfg);
+}
+
+void
+MHU::unserialize(CheckpointIn &cp)
+{
+    UNSERIALIZE_SCALAR(scfg);
+}
+
 } // namespace gem5

@@ -37,8 +37,12 @@
 
 #include "dev/arm/css/scmi_protocols.hh"
 
+#include <algorithm>
+#include <cstring>
+
 #include "debug/SCMI.hh"
 #include "dev/arm/css/scmi_platform.hh"
+#include "sim/dvfs_handler.hh"
 
 namespace gem5
 {
@@ -178,11 +182,11 @@ BaseProtocol::discoverVendor(Message &msg)
     auto& payload = msg.payload.baseDiscoverVendor;
     payload.status = SUCCESS;
 
-    auto vendor_size = vendor.copy(
-        (char*)&payload.vendorIdentifier, MAX_STRING_SIZE);
+    std::memset(payload.vendorIdentifier, 0, 16);
+    vendor.copy((char *)&payload.vendorIdentifier, MAX_STRING_SIZE);
 
     // header + status + payload
-    msg.length = sizeof(uint32_t) * 2 + vendor_size;
+    msg.length = sizeof(uint32_t) * 2 + 16;
 }
 
 void
@@ -191,11 +195,11 @@ BaseProtocol::discoverSubVendor(Message &msg)
     auto& payload = msg.payload.baseDiscoverSubVendor;
     payload.status = SUCCESS;
 
-    auto subvendor_size = subvendor.copy(
-        (char*)&payload.vendorIdentifier, MAX_STRING_SIZE);
+    std::memset(payload.vendorIdentifier, 0, 16);
+    subvendor.copy((char *)&payload.vendorIdentifier, MAX_STRING_SIZE);
 
     // header + status + payload
-    msg.length = sizeof(uint32_t) * 2 + subvendor_size;
+    msg.length = sizeof(uint32_t) * 2 + 16;
 }
 
 void
@@ -225,9 +229,13 @@ BaseProtocol::discoverListProtocols(Message &msg)
         auto *protocols = (uint8_t*)payload.protocols;
         uint32_t num_implemented = 0;
 
-        for (auto protoc_id = START + skip; protoc_id <= END; protoc_id++) {
+        uint32_t seen = 0;
+        for (unsigned protoc_id = START; protoc_id <= END; protoc_id++) {
             auto it = protocol_list.find(protoc_id);
             if (it != protocol_list.end()) {
+                if (seen++ < skip) {
+                    continue;
+                }
                 num_implemented++;
 
                 *protocols = it->first;
@@ -238,8 +246,8 @@ BaseProtocol::discoverListProtocols(Message &msg)
         payload.status = SUCCESS;
         payload.numProtocols = num_implemented;
 
-        // header + status + return
-        msg.length = sizeof(uint32_t) * 3;
+        // Protocol IDs are packed bytes after numProtocols.
+        msg.length = sizeof(uint32_t) * (3 + (num_implemented + 3) / 4);
     }
 }
 
@@ -247,14 +255,14 @@ void
 BaseProtocol::discoverAgent(Message &msg)
 {
     auto& payload = msg.payload.baseDiscoverAgent;
-    const uint32_t agent_id = payload.agentId;
+    const uint32_t agent_id =
+        payload.agentId == 0xffffffff ? 1 : payload.agentId;
 
     if (agent_id > platform.numAgents()) {
         payload.status = NOT_FOUND;
         msg.length = sizeof(uint32_t) * 2;
 
     } else {
-        auto agent_size = 0;
         auto agent_name = std::string();
 
         if (agent_id)  {
@@ -265,13 +273,14 @@ BaseProtocol::discoverAgent(Message &msg)
             agent_name = "platform";
         }
 
-        agent_size = agent_name.length();
-
-        strncpy((char *)&payload.name, agent_name.c_str(), agent_size + 1);
+        std::memset(payload.name, 0, 16);
+        std::memcpy(payload.name, agent_name.c_str(),
+                    std::min(agent_name.size(), size_t(MAX_STRING_SIZE)));
 
         payload.status = SUCCESS;
-        // header + status + payload
-        msg.length = sizeof(uint32_t) * 2 + agent_size;
+        payload.discoveredAgentId = agent_id;
+        // header + status + agent ID + name
+        msg.length = sizeof(uint32_t) * 3 + 16;
     }
 }
 
@@ -279,8 +288,211 @@ void
 BaseProtocol::invalidCommand(Message &msg)
 {
     auto& payload = msg.payload.invalidCommand;
-    payload.status = NOT_FOUND;
+    payload.status = NOT_SUPPORTED;
     msg.length = sizeof(uint32_t) * 2;
+}
+
+namespace
+{
+
+void
+reply(Message &msg, StatusCode status,
+      std::initializer_list<uint32_t> words = {})
+{
+    msg.payload = Payload();
+    msg.payload.status = status;
+    unsigned i = 1;
+    for (auto word : words) {
+        msg.payload.words[i++] = word;
+    }
+    msg.length = (i + 1) * sizeof(uint32_t);
+}
+
+void
+replyName(Message &msg, unsigned offset, const std::string &name)
+{
+    std::memcpy(&msg.payload.words[offset], name.c_str(),
+                std::min(name.size(), size_t(15)));
+    msg.length = (offset + 5) * sizeof(uint32_t);
+}
+
+} // anonymous namespace
+
+bool
+ControlProtocol::supported(uint32_t command) const
+{
+    return performance
+               ? command <= 8
+               : command <= 3 || command == 6 || command == 9 || command == 10;
+}
+
+void
+ControlProtocol::version(Message &msg)
+{
+    reply(msg, SUCCESS, {0x30000});
+}
+
+void
+ControlProtocol::attributes(Message &msg)
+{
+    // Abstract policy cost; no shared statistics area or asynchronous reads.
+    reply(msg, SUCCESS, {platform.dvfs->numDomains(), 0, 0, 0});
+}
+
+void
+ControlProtocol::messageAttributes(Message &msg)
+{
+    reply(msg, supported(msg.payload.words[0]) ? SUCCESS : NOT_FOUND, {0});
+}
+
+void
+ControlProtocol::handleMessage(Message &msg)
+{
+    const auto command = Platform::messageID(msg);
+    if (!supported(command)) {
+        reply(msg, NOT_SUPPORTED);
+        return;
+    }
+    unsigned words = command < 2 ? 0 : 1;
+    if (performance && (command == 4 || command == 7)) {
+        words = 2;
+    }
+    if (performance && command == 5) {
+        words = 3;
+    }
+    if (!performance && (command == 6 || command == 10)) {
+        words = 2;
+    }
+    if (msg.length != 4 * (words + 1)) {
+        reply(msg, INVALID_PARAMETERS);
+        return;
+    }
+    if (command == 0) {
+        version(msg);
+        return;
+    }
+    if (command == 1) {
+        attributes(msg);
+        return;
+    }
+    if (command == 2) {
+        messageAttributes(msg);
+        return;
+    }
+    const uint32_t id = msg.payload.words[0];
+    const uint32_t arg = msg.payload.words[1];
+    const uint32_t arg2 = msg.payload.words[2];
+    if (!performance) {
+        if (id >= platform.dvfs->numDomains()) {
+            reply(msg, command == 3 ? OUT_OF_RANGE : NOT_FOUND);
+            return;
+        }
+        switch (command) {
+            case 3:
+                reply(msg, SUCCESS,
+                      {1 | ((platform.dvfs->numDomains() - id - 1) << 16), id,
+                       0, (29 << 11) | 2});
+                replyName(msg, 5, "cluster" + std::to_string(id));
+                return;
+            case 6: {
+                if (arg) {
+                    reply(msg, INVALID_PARAMETERS);
+                    return;
+                }
+                if (!(platform.sensorConfig[id] & 1)) {
+                    reply(msg, DENIED);
+                    return;
+                }
+                uint64_t value = platform.getTemperatureMilliC(id);
+                reply(msg, SUCCESS, {uint32_t(value), uint32_t(value >> 32)});
+                return;
+            }
+            case 9:
+                reply(msg, SUCCESS, {platform.sensorConfig[id]});
+                return;
+            case 10:
+                if (arg & ~1U) {
+                    reply(msg, INVALID_PARAMETERS);
+                    return;
+                }
+                platform.sensorConfig[id] = arg;
+                reply(msg, SUCCESS);
+                return;
+        }
+    }
+    auto dvfs = platform.dvfs;
+    if (id >= dvfs->numDomains()) {
+        reply(msg, NOT_FOUND);
+        return;
+    }
+    const auto &levels = platform.levels;
+    const auto &costs = platform.costs;
+    auto findLevel = [&](uint32_t level) {
+        return std::find(levels.begin(), levels.end(), level);
+    };
+    auto applyLevel = [&](uint32_t level) {
+        unsigned index = findLevel(level) - levels.begin();
+        if (dvfs->perfLevel(id) != index) {
+            if (!dvfs->perfLevel(id, index)) {
+                return false;
+            }
+            platform.replyAt = curTick() + dvfs->transLatency();
+        }
+        return true;
+    };
+    switch (command) {
+        case 3:
+            reply(msg, SUCCESS, {0xc0000000, 0, 2000000, 2000});
+            replyName(msg, 5, "cluster" + std::to_string(id));
+            return;
+        case 4:
+            if (arg >= levels.size()) {
+                reply(msg, INVALID_PARAMETERS);
+                return;
+            }
+            reply(msg, SUCCESS, {uint32_t(levels.size() - arg)});
+            for (unsigned i = arg, w = 2; i < levels.size(); ++i) {
+                unsigned index = levels.size() - i - 1;
+                msg.payload.words[w++] = levels[index];
+                msg.payload.words[w++] = costs[index];
+                msg.payload.words[w++] =
+                    dvfs->transLatency() / sim_clock::as_int::us;
+            }
+            msg.length = (3 + 3 * (levels.size() - arg)) * 4;
+            return;
+        case 5: {
+            if (arg < arg2 || findLevel(arg) == levels.end() ||
+                findLevel(arg2) == levels.end()) {
+                reply(msg, INVALID_PARAMETERS);
+                return;
+            }
+            uint32_t level = levels[dvfs->perfLevel(id)];
+            level = std::clamp(level, arg2, arg);
+            if (!applyLevel(level)) {
+                reply(msg, BUSY);
+                return;
+            }
+            platform.maxLevels[id] = arg;
+            platform.minLevels[id] = arg2;
+            reply(msg, SUCCESS);
+            return;
+        }
+        case 6:
+            reply(msg, SUCCESS,
+                  {platform.maxLevels[id], platform.minLevels[id]});
+            return;
+        case 7:
+            if (findLevel(arg) == levels.end() ||
+                arg > platform.maxLevels[id] || arg < platform.minLevels[id]) {
+                reply(msg, INVALID_PARAMETERS);
+                return;
+            }
+            reply(msg, applyLevel(arg) ? SUCCESS : BUSY);
+            return;
+        case 8:
+            reply(msg, SUCCESS, {levels[dvfs->perfLevel(id)]});
+            return;
+    }
 }
 
 } // namespace gem5

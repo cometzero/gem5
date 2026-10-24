@@ -37,11 +37,16 @@
 
 #include "dev/arm/css/scmi_platform.hh"
 
-#include <stddef.h>
+#include <cmath>
+#include <cstddef>
 
 #include "debug/SCMI.hh"
+#include "dev/arm/css/mhu.hh"
 #include "dev/arm/doorbell.hh"
 #include "mem/packet_access.hh"
+#include "mem/port_proxy.hh"
+#include "sim/dvfs_handler.hh"
+#include "sim/power/thermal_domain.hh"
 
 namespace gem5
 {
@@ -76,9 +81,9 @@ AgentChannel::readStatus()
     // Reading the the mailbox to check the
     // channel status. The value will be handled by the readLength
     // event/method
-    dmaPort->dmaAction(MemCmd::ReadReq, address, sizeof(uint32_t),
-                       &readLengthEvent, (uint8_t*)&msgBuffer.channelStatus,
-                       0, Request::UNCACHEABLE);
+    dmaPort->dmaAction(MemCmd::ReadReq, address, 16, &readLengthEvent,
+                       (uint8_t *)&msgBuffer.channelStatus, 0,
+                       Request::UNCACHEABLE);
 }
 
 void
@@ -113,6 +118,16 @@ AgentChannel::readMessage()
     DPRINTF(SCMI, "SCMI Virtual channel %u, message.length: %u\n",
             virtID, msgBuffer.length);
 
+    if (msgBuffer.length < sizeof(uint32_t) ||
+        msgBuffer.length > sizeof(msgBuffer.header) + sizeof(Payload) ||
+        offset + msgBuffer.length > shmem.size() || msgBuffer.length % 4) {
+        msgBuffer.header = 0;
+        msgBuffer.length = 8;
+        msgBuffer.payload.status = INVALID_PARAMETERS;
+        platform->find(this)->writeBackMessage(msgBuffer);
+        return;
+    }
+
     dmaPort->dmaAction(MemCmd::ReadReq, address,
                        msgBuffer.length,
                        &handleMessageEvent, (uint8_t*)&msgBuffer.header,
@@ -133,12 +148,13 @@ AgentChannel::handleMessage()
 }
 
 PlatformChannel::PlatformChannel(const ScmiChannelParams &p)
-  : VirtualChannel(p),
-    clearDoorbellEvent([this]{ clearDoorbell(); }, name()),
-    notifyAgentEvent([this]{ notifyAgent(); }, name()),
-    completeEvent([this]{ complete(); }, name()),
-    agentDoorbellVal(0),
-    platformDoorbellVal(0)
+    : VirtualChannel(p),
+      clearDoorbellEvent([this] { clearDoorbell(); }, name()),
+      releaseChannelEvent([this] { releaseChannel(); }, name()),
+      notifyAgentEvent([this] { notifyAgent(); }, name()),
+      completeEvent([this] { complete(); }, name()),
+      agentDoorbellVal(0),
+      platformDoorbellVal(0)
 {}
 
 void
@@ -149,15 +165,18 @@ PlatformChannel::writeBackMessage(const Message &msg)
             " with status code: %d\n",
             virtID, Platform::messageID(msg), msg.payload.status);
 
+    pendingMessage = true;
     // Field by field copy of the message
     msgBuffer = msg;
 
-    // Mark the channel as free in the message buffer
-    msgBuffer.channelStatus = 0x1;
+    // Publish the free flag only after every response byte and the doorbell
+    // clear have completed. A polling agent may reuse the mailbox immediately.
+    msgBuffer.channelStatus = 0;
 
-    dmaPort->dmaAction(MemCmd::WriteReq, shmem.start(), sizeof(msgBuffer),
-                       &clearDoorbellEvent, (uint8_t*)&msgBuffer,
-                       0, Request::UNCACHEABLE);
+    dmaPort->dmaAction(MemCmd::WriteReq, shmem.start(),
+                       offsetof(Message, header) + msg.length,
+                       &clearDoorbellEvent, (uint8_t *)&msgBuffer, 0,
+                       Request::UNCACHEABLE);
 }
 
 void
@@ -167,15 +186,22 @@ PlatformChannel::clearDoorbell()
             "SCMI Virtual channel %u, clearing doorbell\n",
             virtID);
 
-    AgentChannel* agent_ch = platform->find(this);
-    agent_ch->pendingMessage = false;
-
+    AgentChannel *agent_ch = platform->find(this);
     agentDoorbellVal = 0xffffffff;
-    dmaPort->dmaAction(MemCmd::WriteReq,
-                       agent_ch->doorbell->clearAddress(),
-                       sizeof(uint32_t),
-                       &notifyAgentEvent, (uint8_t*)&agentDoorbellVal,
-                       0, Request::UNCACHEABLE);
+    dmaPort->dmaAction(MemCmd::WriteReq, agent_ch->doorbell->clearAddress(),
+                       sizeof(uint32_t), &releaseChannelEvent,
+                       (uint8_t *)&agentDoorbellVal, 0, Request::UNCACHEABLE);
+}
+
+void
+PlatformChannel::releaseChannel()
+{
+    platform->find(this)->pendingMessage = false;
+    msgBuffer.channelStatus = 1;
+    dmaPort->dmaAction(
+        MemCmd::WriteReq, shmem.start() + offsetof(Message, channelStatus),
+        sizeof(msgBuffer.channelStatus), &notifyAgentEvent,
+        (uint8_t *)&msgBuffer.channelStatus, 0, Request::UNCACHEABLE);
 }
 
 void
@@ -185,6 +211,10 @@ PlatformChannel::notifyAgent()
             "SCMI Virtual channel %u, notifying agent\n",
             virtID);
 
+    if (!(msgBuffer.mailboxFlags & 1)) {
+        complete();
+        return;
+    }
     platformDoorbellVal = 1 << virtID;
     dmaPort->dmaAction(MemCmd::WriteReq, doorbell->setAddress(),
                        sizeof(uint32_t),
@@ -200,18 +230,61 @@ PlatformChannel::complete()
 }
 
 Platform::Platform(const ScmiPlatformParams &p)
-  : Scp(p),
-    comms(p.comms),
-    agents(p.agents),
-    protocols({ {BASE, new BaseProtocol(*this)} }),
-    dmaPort(this, p.sys)
+    : Scp(p),
+      dvfs(p.dvfs),
+      thermalDomains(p.thermal_domains),
+      levels(p.perf_levels),
+      costs(p.perf_costs),
+      comms(p.comms),
+      agents(p.agents),
+      protocols({{BASE, new BaseProtocol(*this)}}),
+      dmaPort(this, p.sys),
+      temperatureMilliC(p.dvfs ? p.dvfs->numDomains() : 0,
+                        p.initial_temperature_mc),
+      replyEvent(
+          [this] {
+              find(replyChannel)->writeBackMessage(replyMessage);
+              replyChannel = nullptr;
+          },
+          name(), false, Event::DVFS_Update_Pri + 1)
 {
     for (const auto &agent_name : agents) {
         fatal_if(agent_name.length() > Protocol::MAX_STRING_SIZE,
                  "Invalid BASE_PROTOCOL AGENT size\n");
     }
 
+    if (dvfs) {
+        fatal_if(comms.size() != 1,
+                 "SCMI control requires one synchronous communication");
+        fatal_if(!dvfs->isEnabled() || levels.empty() ||
+                     levels.size() != costs.size() || levels.size() > 20,
+                 "Invalid SCMI DVFS backend");
+        for (unsigned i = 0; i < dvfs->numDomains(); ++i) {
+            fatal_if(dvfs->domainID(i) != i ||
+                         dvfs->numPerfLevels(i) != levels.size(),
+                     "SCMI requires contiguous DVFS domains and common OPPs");
+        }
+        fatal_if(!thermalDomains.empty() &&
+                     thermalDomains.size() != dvfs->numDomains(),
+                 "SCMI needs one thermal sensor per DVFS domain");
+        sensorConfig.assign(dvfs->numDomains(), 1);
+        fatal_if(p.initial_temperature_mc < -40000 ||
+                     p.initial_temperature_mc > 150000,
+                 "Invalid initial synthetic sensor temperature");
+        for (unsigned i = 1; i < levels.size(); ++i) {
+            fatal_if(levels[i] >= levels[i - 1],
+                     "SCMI performance levels must be strictly descending");
+        }
+        minLevels.assign(dvfs->numDomains(), levels.back());
+        maxLevels.assign(dvfs->numDomains(), levels.front());
+        protocols.emplace(PERFORMANCE_DOMAIN,
+                          new ControlProtocol(*this, true));
+        protocols.emplace(SENSOR, new ControlProtocol(*this, false));
+    }
     for (auto comm : comms) {
+        fatal_if(comm->agentChan->shmem.size() < sizeof(Message) ||
+                     comm->platformChan->shmem.size() < sizeof(Message),
+                 "SCMI shared memory is too small");
         comm->agentChan->dmaPort = &dmaPort;
         comm->agentChan->setPlatform(this);
 
@@ -243,21 +316,110 @@ Platform::getPort(const std::string &if_name, PortID idx)
 void
 Platform::handleMessage(AgentChannel *agent_ch, Message &msg)
 {
-    auto prot_id = protocolID(msg);
+    dispatchMessage(msg);
+    if (replyAt > curTick()) {
+        panic_if(replyEvent.scheduled(), "Overlapping SCMI response");
+        replyChannel = agent_ch;
+        replyMessage = msg;
+        schedule(replyEvent, replyAt);
+    } else {
+        find(agent_ch)->writeBackMessage(msg);
+    }
+}
 
-    auto it = protocols.find(prot_id);
+void
+Platform::dispatchMessage(Message &msg)
+{
+    replyAt = curTick();
+    auto it = protocols.find(protocolID(msg));
+    if (messageType(msg) != 0 || it == protocols.end()) {
+        msg.payload.status = NOT_SUPPORTED;
+        msg.length = 8;
+        return;
+    }
+    // All Base commands with arguments consume one word.
+    if (protocolID(msg) == BASE) {
+        unsigned id = messageID(msg);
+        bool argument = id == 2 || id == 6 || id == 7;
+        if (msg.length != (argument ? 8 : 4) && id <= 7) {
+            msg.payload.status = INVALID_PARAMETERS;
+            msg.length = 8;
+            return;
+        }
+    }
+    it->second->handleMessage(msg);
+}
 
-    panic_if(it == protocols.end(),
-             "Unimplemented SCMI protocol: %u\n", prot_id);
+bool
+Platform::idle() const
+{
+    if (dmaPort.dmaPending() || replyEvent.scheduled() ||
+        replyAt > curTick()) {
+        return false;
+    }
+    for (auto comm : comms) {
+        auto agent =
+            dynamic_cast<const MhuDoorbell *>(comm->agentChan->doorbell);
+        auto platform =
+            dynamic_cast<const MhuDoorbell *>(comm->platformChan->doorbell);
+        if ((agent && !agent->idle()) || (platform && !platform->idle())) {
+            return false;
+        }
+        if (comm->agentChan->pendingMessage ||
+            comm->platformChan->pendingMessage) {
+            return false;
+        }
+    }
+    return true;
+}
 
-    Protocol *protocol = it->second;
-    protocol->handleMessage(msg);
+void
+Platform::initState()
+{
+    PortProxy proxy(dmaPort, 64);
+    uint32_t free = 1;
+    for (auto comm : comms) {
+        proxy.writeBlob(comm->agentChan->shmem.start() + 4, &free, 4);
+    }
+}
 
-    // Find the platform channel
-    PlatformChannel *platform_ch = find(agent_ch);
+void
+Platform::setTemperatureMilliC(unsigned id, int64_t value)
+{
+    fatal_if(id >= temperatureMilliC.size() || value < -40000 ||
+                 value > 150000,
+             "Invalid SCMI synthetic sensor value");
+    fatal_if(!thermalDomains.empty(), "Native thermal sensors are read-only");
+    temperatureMilliC[id] = value;
+}
 
-    // Send the message back to the platform channel
-    platform_ch->writeBackMessage(msg);
+int64_t
+Platform::getTemperatureMilliC(unsigned id) const
+{
+    return thermalDomains.empty()
+               ? temperatureMilliC.at(id)
+               : std::llround(
+                     thermalDomains.at(id)->currentTemperature().toCelsius() *
+                     1000);
+}
+
+void
+Platform::serialize(CheckpointOut &cp) const
+{
+    fatal_if(!idle(), "SCMI checkpoint requires idle control channels");
+    SERIALIZE_CONTAINER(temperatureMilliC);
+    SERIALIZE_CONTAINER(sensorConfig);
+    SERIALIZE_CONTAINER(minLevels);
+    SERIALIZE_CONTAINER(maxLevels);
+}
+
+void
+Platform::unserialize(CheckpointIn &cp)
+{
+    UNSERIALIZE_CONTAINER(temperatureMilliC);
+    UNSERIALIZE_CONTAINER(sensorConfig);
+    UNSERIALIZE_CONTAINER(minLevels);
+    UNSERIALIZE_CONTAINER(maxLevels);
 }
 
 void
