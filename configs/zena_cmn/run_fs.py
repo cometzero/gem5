@@ -62,6 +62,9 @@ def main():
     parser.add_argument("--roofline-trace", action="store_true")
     parser.add_argument("--cpus", type=int, choices=(4, 8, 16))
     parser.add_argument("--channels", type=int, choices=(4, 8, 16))
+    parser.add_argument(
+        "--interleave-bytes", type=int, choices=(64, 512, 1024)
+    )
     parser.add_argument("--kernel", required=True, type=file_arg)
     parser.add_argument("--bootloader", required=True, type=file_arg)
     parser.add_argument("--initrd", required=True, type=file_arg)
@@ -108,6 +111,7 @@ def main():
         )
     for name, value in (
         ("memory.channels", args.channels),
+        ("memory.interleave_bytes", args.interleave_bytes),
         ("cmn.dmt", args.dmt),
         ("cmn.dct", args.dct),
         ("ruby.timing_dvm", args.timing_dvm),
@@ -279,6 +283,7 @@ def main():
         },
         "memory_fingerprint": ruby._memory_backend["fingerprint"],
         "memory_part_provenance": ruby._memory_backend["part_provenance"],
+        "address_validation": ruby._memory_backend["address_validation"],
         "future_npu": (
             "FUNC_OPS_TIMING_MODEL_UNCALIBRATED"
             if smmu is not None

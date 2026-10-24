@@ -51,14 +51,26 @@ class PartitionTest(unittest.TestCase):
 
     def test_exact_partition(self):
         for count in (4, 8, 16):
-            masks = [1 << (6 + b) for b in range(count.bit_length() - 1)]
-            ranges = [
-                ":".join(map(str, [0x80000000, 0x100000000, i, *masks]))
-                for i in range(count)
-            ]
-            self.assertTrue(partition(ranges, "2147483648:4294967296", count))
-            ranges[-1] = ranges[0]
-            self.assertFalse(partition(ranges, "2147483648:4294967296", count))
+            for stripe in (64, 512, 1024):
+                masks = [
+                    1 << (stripe.bit_length() - 1 + b)
+                    for b in range(count.bit_length() - 1)
+                ]
+                ranges = [
+                    ":".join(map(str, [0x80000000, 0x100000000, i, *masks]))
+                    for i in range(count)
+                ]
+                self.assertTrue(
+                    partition(ranges, "2147483648:4294967296", count, stripe)
+                )
+                if stripe != 64:
+                    self.assertFalse(
+                        partition(ranges, "2147483648:4294967296", count, 64)
+                    )
+                ranges[-1] = ranges[0]
+                self.assertFalse(
+                    partition(ranges, "2147483648:4294967296", count, stripe)
+                )
 
 
 @unittest.skipUnless(

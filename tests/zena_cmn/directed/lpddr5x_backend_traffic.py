@@ -28,6 +28,9 @@ from zena_cmn.parameters import load_parameters
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--channels", type=int, choices=(4, 8, 16), required=True)
 parser.add_argument(
+    "--interleave-bytes", type=int, choices=(64, 512, 1024), default=64
+)
+parser.add_argument(
     "--read-percent", type=int, choices=(0, 50, 100), default=100
 )
 parser.add_argument("--synthetic", action="store_true")
@@ -47,7 +50,10 @@ if args.synthetic and args.hynix:
     parser.error("--synthetic and --hynix are mutually exclusive")
 if args.diagnostic != "baseline" and not args.hynix:
     parser.error("diagnostics require the explicit --hynix candidate")
-overrides = {"memory.channels": args.channels}
+overrides = {
+    "memory.channels": args.channels,
+    "memory.interleave_bytes": args.interleave_bytes,
+}
 if not args.synthetic:
     overrides.update(
         {
@@ -111,10 +117,10 @@ def traffic(gen, channel):
         30_000_000,
         0x80000000,
         0x84000000,
-        channel * 64,
+        channel * args.interleave_bytes,
         64,
-        64,
-        args.channels * 64,
+        args.interleave_bytes,
+        args.channels * args.interleave_bytes,
         2000,
         2000,
         args.read_percent,
@@ -155,6 +161,8 @@ else:
 manifest = {
     "drain_completion": drain,
     "channels": args.channels,
+    "interleave_bytes": args.interleave_bytes,
+    "address_validation": backend["address_validation"],
     "read_percent": args.read_percent,
     "synthetic": args.synthetic,
     "hynix": args.hynix,

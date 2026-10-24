@@ -1,29 +1,36 @@
 # Copyright (c) 2026 Chanho Park
 # SPDX-License-Identifier: BSD-3-Clause
-"""Explicit 64-byte channel/Home striping, checked against native AddrRange."""
+"""Independent Home/channel striping, checked against native AddrRange."""
 
 import random
 
 
-def striped_ranges(base_range, count):
+def striped_ranges(base_range, count, interleave_bytes=64):
     from m5.objects import AddrRange
 
     if count not in (4, 8, 16):
         raise ValueError("striping count must be 4, 8 or 16")
+    if type(interleave_bytes) is not int or interleave_bytes not in (
+        64,
+        512,
+        1024,
+    ):
+        raise ValueError("interleave_bytes must be 64, 512 or 1024")
     if (
         base_range.intlvBits
-        or int(base_range.start) % (64 * count)
-        or base_range.size() % (64 * count)
+        or int(base_range.start) % (interleave_bytes * count)
+        or base_range.size() % (interleave_bytes * count)
     ):
         raise ValueError(
             "RAM must be contiguous and aligned to a stripe cycle"
         )
     bits = count.bit_length() - 1
+    low_bit = interleave_bytes.bit_length() - 1
     return [
         AddrRange(
             int(base_range.start),
             size=base_range.size(),
-            intlvHighBit=6 + bits - 1,
+            intlvHighBit=low_bit + bits - 1,
             xorHighBit=0,
             intlvBits=bits,
             intlvMatch=index,
@@ -32,10 +39,18 @@ def striped_ranges(base_range, count):
     ]
 
 
-def validate_ranges(base_range, home_ranges, channel_ranges):
+def validate_ranges(
+    base_range, home_ranges, channel_ranges, interleave_bytes=64
+):
     """Prove partition by masks; compare samples with C++ range membership."""
     from m5.objects import AddrRange
 
+    if type(interleave_bytes) is not int or interleave_bytes not in (
+        64,
+        512,
+        1024,
+    ):
+        raise ValueError("interleave_bytes must be 64, 512 or 1024")
     start, end = int(base_range.start), int(base_range.end)
     if base_range.intlvBits or start >= end:
         raise ValueError("base RAM range must be nonempty and contiguous")
@@ -49,9 +64,11 @@ def validate_ranges(base_range, home_ranges, channel_ranges):
         if count not in (4, 8, 16) or (kind == "home" and count != 8):
             raise ValueError(f"invalid {kind} count")
         bits = count.bit_length() - 1
-        if start % (64 * count) or (end - start) % (64 * count):
+        stripe = 64 if kind == "home" else interleave_bytes
+        low_bit = stripe.bit_length() - 1
+        if start % (stripe * count) or (end - start) % (stripe * count):
             raise ValueError("RAM must cover whole stripe cycles")
-        expected_masks = [1 << (6 + bit) for bit in range(bits)]
+        expected_masks = [1 << (low_bit + bit) for bit in range(bits)]
         if sum(region.size() for region in ranges) != base_range.size():
             raise ValueError(f"{kind} ranges have incorrect total capacity")
         for index, region in enumerate(ranges):
@@ -72,7 +89,7 @@ def validate_ranges(base_range, home_ranges, channel_ranges):
                 for index, region in enumerate(native_ranges)
                 if point.isSubset(region)
             ]
-            if matches != [(address >> 6) & (count - 1)]:
+            if matches != [(address >> low_bit) & (count - 1)]:
                 raise ValueError(
                     f"native {kind} selection mismatch at {address:#x}"
                 )
@@ -82,8 +99,10 @@ def validate_ranges(base_range, home_ranges, channel_ranges):
         "capacity_bytes": base_range.size(),
         "home_count": len(home_ranges),
         "channels": len(channel_ranges),
+        "home_interleave_bytes": 64,
+        "channel_interleave_bytes": interleave_bytes,
         "home_select": "(PA >> 6) & 7",
-        "channel_select": "(PA >> 6) & (channels - 1)",
+        "channel_select": f"(PA >> {interleave_bytes.bit_length() - 1}) & (channels - 1)",
         "xor_enabled": False,
         "partition_proof": "identical bounds; complete disjoint low-bit selectors",
         "membership_check": "native AddrRange::isSubset for one-byte ranges",

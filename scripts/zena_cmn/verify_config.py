@@ -117,17 +117,20 @@ def objects(value):
     return result
 
 
-def partition(ranges, base, count):
+def partition(ranges, base, count, interleave_bytes=64):
     start, end = map(int, base.split(":"))
-    masks = [1 << (6 + bit) for bit in range(count.bit_length() - 1)]
+    if count not in (4, 8, 16) or interleave_bytes not in (64, 512, 1024):
+        return False
+    low_bit = interleave_bytes.bit_length() - 1
+    masks = [1 << (low_bit + bit) for bit in range(count.bit_length() - 1)]
     return (
         ranges
         == [
             ":".join(map(str, [start, end, index, *masks]))
             for index in range(count)
         ]
-        and start % (count * 64) == 0
-        and (end - start) % (count * 64) == 0
+        and start % (count * interleave_bytes) == 0
+        and (end - start) % (count * interleave_bytes) == 0
     )
 
 
@@ -450,7 +453,12 @@ def verify(config, profile):
             "Home partition",
         )
         check(
-            partition([m["dram"]["range"] for m in mcs], base[0], channels),
+            partition(
+                [m["dram"]["range"] for m in mcs],
+                base[0],
+                channels,
+                profile["memory"]["interleave_bytes"],
+            ),
             "MC partition",
         )
         for obj in index.values():

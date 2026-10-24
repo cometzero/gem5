@@ -187,7 +187,7 @@ memory:
     channel_xor_enabled: false
     home_count: 8
     home_select: (PA >> 6) & 7
-    channel_select: (PA >> 6) & (channels - 1)
+    channel_select: (PA >> log2(interleave_bytes)) & (channels - 1)
     snf_request_tbes: 64
     preserve_all_existing_timing_parameters: true
     preserve_existing_scheduler_and_page_policy: true

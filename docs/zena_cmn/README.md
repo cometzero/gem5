@@ -58,6 +58,19 @@ telnet localhost 3456
 
 기본은 16 CPU / 4 cluster / 16 LPDDR5X 채널 / 2 GiB RAM이다. `--channels 4|8|16`은 총 메모리 용량을 유지한다. `--cpus 4`는 별도의 4 CPU firmware를 함께 지정해야 한다. 8 CPU 설정도 지원하나 8 CPU firmware는 기본 제공하지 않는다. 잘못된 firmware CPU count는 실행 전에 거절한다.
 
+`run_fs.py --interleave-bytes 64|512|1024` 또는 profile의
+`memory.interleave_bytes`로 DRAM channel striping을 선택한다. 기본은 64 B이며,
+channel selector는 `(PA >> log2(interleave_bytes)) & (channels - 1)`이다.
+Home selector `(PA >> 6) & 7`과 cache line 64 B는 그대로 유지한다. 따라서
+512 B/1 KiB 구성에서는 한 channel stripe에 여러 Home의 cache line이 포함된다.
+RAM 2 GiB, channel당 x16, DRAM timing은 바뀌지 않는다. 이 설정은 단순
+address striping 비교이며 Thor의 DMC/PHY 또는 address swizzle 재현이 아니다.
+실행의 `resolved-profile.json`과 `manifest.json.address_validation`에 설정을
+기록한다. Interleave 변경은 checkpoint 계약 변경이므로 새 snapshot을 사용한다.
+Native partition 회귀는 `gem5.opt tests/zena_cmn/test_address_map.py`로,
+CPU 없는 backend traffic은 `tests/zena_cmn/directed/lpddr5x_backend_traffic.py
+--synthetic --channels 16 --interleave-bytes 512`로 검사한다.
+
 일반 shell 부팅은 atomic_noncaching이다. O3 성능 측정은 게스트의 명시적인 switch/warmup/ROI marker가 필요하다. 자동 검증 실행 예:
 
 ```sh

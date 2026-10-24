@@ -61,12 +61,36 @@ class AddressMapTest(unittest.TestCase):
 
     def test_native_partition(self):
         for channels in (4, 8, 16):
-            base = AddrRange(0x80000000, size="2GiB")
-            result = validate_ranges(
-                base, striped_ranges(base, 8), striped_ranges(base, channels)
-            )
-            self.assertEqual(result["status"], "PASS")
-            self.assertEqual(result["capacity_bytes"], 2 * 1024**3)
+            for stripe in (64, 512, 1024):
+                with self.subTest(channels=channels, stripe=stripe):
+                    base = AddrRange(0x80000000, size="2GiB")
+                    result = validate_ranges(
+                        base,
+                        striped_ranges(base, 8),
+                        striped_ranges(base, channels, stripe),
+                        stripe,
+                    )
+                    self.assertEqual(result["status"], "PASS")
+                    self.assertEqual(result["capacity_bytes"], 2 * 1024**3)
+                    self.assertEqual(result["home_select"], "(PA >> 6) & 7")
+                    self.assertEqual(
+                        result["channel_interleave_bytes"], stripe
+                    )
+
+    def test_invalid_stripe(self):
+        base = AddrRange(0x80000000, size="2GiB")
+        for stripe in (0, 32, 128, 513, 2048, True, 64.0):
+            with self.subTest(stripe=stripe), self.assertRaises(ValueError):
+                striped_ranges(base, 16, stripe)
+
+    def test_channel_and_home_selectors_are_independent(self):
+        base = AddrRange(0x80000000, size="2GiB")
+        homes = striped_ranges(base, 8)
+        channels = striped_ranges(base, 16, 512)
+        with self.assertRaises(ValueError):
+            validate_ranges(base, homes, channels, 64)
+        with self.assertRaises(ValueError):
+            validate_ranges(base, striped_ranges(base, 8, 512), channels, 512)
 
     def test_wrong_selector(self):
         base = AddrRange(0x80000000, size="2GiB")
@@ -77,15 +101,34 @@ class AddressMapTest(unittest.TestCase):
 
     def test_backend_once(self):
         for count in (4, 8, 16):
-            system = System(mem_ranges=[AddrRange(0x80000000, size="2GiB")])
-            params = load_parameters(overrides={"memory.channels": count})
-            backend = build_memory_backend(system, params)
-            self.assertEqual(len(backend["controllers"]), count)
-            self.assertAlmostEqual(
-                backend["controllers"][0].dram.tCK.value, 0.9375e-9, places=20
-            )
-            with self.assertRaises(ValueError):
-                build_memory_backend(system, params)
+            fingerprint = None
+            for stripe in (64, 512, 1024):
+                with self.subTest(channels=count, stripe=stripe):
+                    system = System(
+                        mem_ranges=[AddrRange(0x80000000, size="2GiB")]
+                    )
+                    params = load_parameters(
+                        overrides={
+                            "memory.channels": count,
+                            "memory.interleave_bytes": stripe,
+                        }
+                    )
+                    backend = build_memory_backend(system, params)
+                    if fingerprint is None:
+                        fingerprint = backend["fingerprint"]
+                    self.assertEqual(backend["fingerprint"], fingerprint)
+                    self.assertEqual(len(backend["controllers"]), count)
+                    self.assertAlmostEqual(
+                        backend["controllers"][0].dram.tCK.value,
+                        0.9375e-9,
+                        places=20,
+                    )
+                    self.assertEqual(
+                        backend["channel_mapping"],
+                        f"(PA >> {stripe.bit_length() - 1}) & (channels - 1)",
+                    )
+                    with self.assertRaises(ValueError):
+                        build_memory_backend(system, params)
 
     def test_existing_factory_parameters_preserved(self):
         from zena_cmn.memory_backend import resolved_memory_parameters

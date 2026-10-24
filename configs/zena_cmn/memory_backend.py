@@ -80,9 +80,10 @@ def build_memory_backend(system, params):
     ):
         raise ValueError("LPDDR5X class channel width does not match profile")
     channels = memory["channels"]
-    ranges = striped_ranges(base, channels)
+    interleave_bytes = memory["interleave_bytes"]
+    ranges = striped_ranges(base, channels, interleave_bytes)
     homes = striped_ranges(base, params["cmn"]["home_count"])
-    address_validation = validate_ranges(base, homes, ranges)
+    address_validation = validate_ranges(base, homes, ranges, interleave_bytes)
     # Keep the original synthetic density unless an explicit part is selected.
     geometry = (
         {}
@@ -153,7 +154,7 @@ def build_memory_backend(system, params):
             "limitation": "Native decoder row count follows exposed aperture; full physical rows and target DMC are not validated",
         },
         "address_validation": address_validation,
-        "channel_mapping": "(PA >> 6) & (channels - 1)",
+        "channel_mapping": address_validation["channel_select"],
         "future_attachment": {
             "npu_present": npu["enabled"],
             "coherent": False,

@@ -126,6 +126,8 @@ class ParametersTest(unittest.TestCase):
             {"cpu.rob_entries": 0},
             {"cpu.clock": "2Gbps"},
             {"memory.channels": 3},
+            {"memory.interleave_bytes": 128},
+            {"memory.interleave_bytes": True},
             {"cmn.network": "unknown"},
             {"scope.npu_present": True},
             {"cache.l2.tag_banks": 3},
@@ -153,6 +155,15 @@ class ParametersTest(unittest.TestCase):
                 }
             )
             self.assertEqual(p["memory"]["channels"], channels)
+
+    def test_interleave_options(self):
+        self.assertEqual(load_parameters()["memory"]["interleave_bytes"], 64)
+        for stripe in (64, 512, 1024):
+            p = load_parameters(overrides={"memory.interleave_bytes": stripe})
+            self.assertEqual(p["memory"]["interleave_bytes"], stripe)
+            self.assertEqual(p["memory"]["capacity_mib_total"], 2048)
+            self.assertEqual(p["memory"]["channel_width_bits"], 16)
+            self.assertEqual(p["memory"]["home_select"], "(PA >> 6) & 7")
 
     def test_exclusive_dct_accepted(self):
         p = load_parameters(

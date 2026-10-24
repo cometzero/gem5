@@ -10,6 +10,7 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parents[2] / "scripts/zena_cmn")
 )
 from summarize_roi import stats_blocks
+from verify_config import partition
 
 
 def check_drain(manifest, blocks):
@@ -101,12 +102,18 @@ def check_drain(manifest, blocks):
 
 def check(directory):
     manifest = json.loads((directory / "traffic-manifest.json").read_text())
+    system = json.loads((directory / "config.json").read_text())["system"]
+    controllers = system["mem_ctrls"]
+    stripe = manifest.get("interleave_bytes", 64)
+    assert len(controllers) == manifest["channels"]
+    assert partition(
+        [controller["dram"]["range"] for controller in controllers],
+        system["mem_ranges"][0],
+        manifest["channels"],
+        stripe,
+    ), "native controller ranges disagree with channel interleave"
     if manifest.get("hynix"):
         # Verify resolved native parameters, not just the Python class defaults.
-        controllers = json.loads((directory / "config.json").read_text())[
-            "system"
-        ]["mem_ctrls"]
-        assert len(controllers) == manifest["channels"]
         for controller in controllers:
             dram = controller["dram"]
             diagnostic = manifest.get("diagnostic", "baseline")
@@ -218,6 +225,7 @@ def check(directory):
         "native_drain": drain_result,
         "run": str(directory),
         "channels": manifest["channels"],
+        "interleave_bytes": stripe,
         "mode": "mixed" if len(modes) == 2 else modes[0].lower(),
         "serviced_bytes_by_direction": serviced,
         "generated_bytes": packets * 64,

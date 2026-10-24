@@ -132,7 +132,7 @@ def validate(params):
         "cache.l2.policy": ("inclusive", "exclusive_data"),
         "memory.channels": (4, 8, 16),
         "memory.capacity_mib_total": 2048,
-        "memory.interleave_bytes": 64,
+        "memory.interleave_bytes": (64, 512, 1024),
         "memory.data_rate_mt_s": 8533,
         "memory.channel_width_bits": 16,
         "cpu.cores_per_cluster": (1, 2, 4),
