@@ -71,6 +71,12 @@ class SubSystem : public SimObject
         powerProducers.push_back(pm);
     }
 
+    const std::vector<PowerModel *> &
+    getPowerProducers() const
+    {
+        return powerProducers;
+    }
+
   protected:
     std::vector<PowerModel*> powerProducers;
 };

@@ -157,9 +157,13 @@ class ThermalModel : public ClockedObject
     Temperature getTemperature() const;
 
     void startup() override;
+    void serialize(CheckpointOut &cp) const override;
+    void unserialize(CheckpointIn &cp) override;
     void doStep();
+    void advance(double seconds);
 
   private:
+    void solve(double seconds);
 
     /* Keep track of all components used for the thermal model */
     std::vector <ThermalDomain *> domains;
@@ -178,6 +182,9 @@ class ThermalModel : public ClockedObject
 
     /** Step in seconds for thermal updates */
     const double _step;
+    const bool automaticStep;
+    bool restored = false;
+    Tick restoredStep = 0;
 };
 
 } // namespace gem5

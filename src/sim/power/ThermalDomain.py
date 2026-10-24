@@ -43,7 +43,10 @@ class ThermalDomain(SimObject):
     cxx_header = "sim/power/thermal_domain.hh"
     cxx_class = "gem5::ThermalDomain"
 
-    cxx_exports = [PyBindMethod("setNode")]
+    cxx_exports = [
+        PyBindMethod("setNode"),
+        PyBindMethod("getTemperatureC"),
+    ]
 
     # Static temperature which may change over time
     initial_temperature = Param.Temperature("25.0C", "Initial temperature")

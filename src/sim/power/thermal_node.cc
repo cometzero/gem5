@@ -38,6 +38,8 @@
 
 #include "sim/power/thermal_node.hh"
 
+#include <limits>
+
 #include "params/ThermalNode.hh"
 
 namespace gem5
@@ -49,6 +51,23 @@ namespace gem5
 ThermalNode::ThermalNode(const ThermalNodeParams &p)
     : SimObject(p), id(-1), isref(false), temp(0.0f)
 {
+}
+
+void
+ThermalNode::serialize(CheckpointOut &cp) const
+{
+    double kelvin = temp.toKelvin();
+    auto precision = cp.precision(std::numeric_limits<double>::max_digits10);
+    SERIALIZE_SCALAR(kelvin);
+    cp.precision(precision);
+}
+
+void
+ThermalNode::unserialize(CheckpointIn &cp)
+{
+    double kelvin;
+    UNSERIALIZE_SCALAR(kelvin);
+    temp = Temperature::fromKelvin(kelvin);
 }
 
 } // namespace gem5

@@ -78,6 +78,11 @@ class ThermalDomain : public SimObject, public ThermalEntity
      * @return current temperature of the domain
      */
     Temperature currentTemperature() const;
+    double
+    getTemperatureC() const
+    {
+        return currentTemperature().toCelsius();
+    }
 
     /** Set/Get circuit node associated with this domain */
     void setNode(ThermalNode * n) { node = n; }
@@ -96,6 +101,11 @@ class ThermalDomain : public SimObject, public ThermalEntity
       *  Set the SubSystem reference we belong to
       */
     void setSubSystem(SubSystem * ss);
+    SubSystem *
+    getSubSystem() const
+    {
+        return subsystem;
+    }
 
   private:
     const Temperature _initTemperature;

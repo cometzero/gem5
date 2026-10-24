@@ -37,6 +37,8 @@
 
 #include "sim/power/thermal_model.hh"
 
+#include <cmath>
+
 #include "base/statistics.hh"
 #include "params/ThermalCapacitor.hh"
 #include "params/ThermalModel.hh"
@@ -44,6 +46,7 @@
 #include "params/ThermalResistor.hh"
 #include "sim/clocked_object.hh"
 #include "sim/linear_solver.hh"
+#include "sim/power/latched_power_model.hh"
 #include "sim/power/thermal_domain.hh"
 #include "sim/sim_object.hh"
 
@@ -143,12 +146,35 @@ ThermalCapacitor::getEquation(ThermalNode * n, unsigned nnodes,
  * ThermalModel
  */
 ThermalModel::ThermalModel(const Params &p)
-    : ClockedObject(p), stepEvent([this]{ doStep(); }, name()), _step(p.step)
+    : ClockedObject(p),
+      stepEvent([this] { doStep(); }, name()),
+      _step(p.step),
+      automaticStep(p.automatic_step)
 {
+    fatal_if(!std::isfinite(_step) || _step <= 0, "Invalid thermal step");
 }
 
 void
 ThermalModel::doStep()
+{
+    fatal_if(!automaticStep, "Use advance() in manual thermal mode");
+    solve(_step);
+    if (!stepEvent.scheduled()) {
+        schedule(stepEvent, curTick() + sim_clock::as_int::s * _step);
+    }
+}
+
+void
+ThermalModel::advance(double seconds)
+{
+    fatal_if(automaticStep, "advance() requires manual thermal mode");
+    fatal_if(!std::isfinite(seconds) || seconds <= 0,
+             "Invalid thermal integration interval");
+    solve(seconds);
+}
+
+void
+ThermalModel::solve(double seconds)
 {
     // Calculate new temperatures!
     // For each node in the system, create the kirchhoff nodal equation
@@ -157,7 +183,7 @@ ThermalModel::doStep()
         auto n = eq_nodes[i];
         LinearEquation node_equation (eq_nodes.size());
         for (auto e : entities) {
-            LinearEquation eq = e->getEquation(n, eq_nodes.size(), _step);
+            LinearEquation eq = e->getEquation(n, eq_nodes.size(), seconds);
             node_equation = node_equation + eq;
         }
         ls[i] = node_equation;
@@ -167,9 +193,6 @@ ThermalModel::doStep()
     std::vector <double> temps = ls.solve();
     for (unsigned i = 0; i < eq_nodes.size(); i++)
         eq_nodes[i]->temp = Temperature::fromKelvin(temps[i]);
-
-    // Schedule next computation
-    schedule(stepEvent, curTick() + sim_clock::as_int::s * _step);
 
     // Notify everybody
     for (auto dom : domains)
@@ -182,13 +205,19 @@ ThermalModel::startup()
     // Look for nodes connected to voltage references, these
     // can be just set to the reference value (no nodal equation)
     for (auto ref : references) {
-        ref->node->temp = ref->_temperature;
+        if (!restored) {
+            ref->node->temp = ref->_temperature;
+        }
         ref->node->isref = true;
     }
     // Setup the initial temperatures
-    for (auto dom : domains)
-        dom->getNode()->temp = dom->initialTemperature();
+    if (!restored) {
+        for (auto dom : domains) {
+            dom->getNode()->temp = dom->initialTemperature();
+        }
+    }
 
+    eq_nodes.clear();
     // Create a list of unknown temperature nodes
     for (auto n : nodes) {
         bool found = false;
@@ -213,7 +242,7 @@ ThermalModel::startup()
     // heat sink in the first solver step, causing physically impossible
     // junction cooling (observed: die temp drops from 25 C to ~12 C despite
     // positive power input in a 2-node Cauer RC network).
-    if (!references.empty()) {
+    if (!restored && !references.empty()) {
         const Temperature ambient = references[0]->_temperature;
         for (auto *n : eq_nodes) {
             if (n->temp.toKelvin() < 1.0) {
@@ -222,13 +251,64 @@ ThermalModel::startup()
         }
     }
 
-    // Schedule first thermal update
-    schedule(stepEvent, curTick() + sim_clock::as_int::s * _step);
+    // A restored deadline retains the integration phase across a checkpoint.
+    Tick next =
+        restored ? restoredStep : curTick() + sim_clock::as_int::s * _step;
+    if (automaticStep) {
+        fatal_if(next < curTick(), "Restored thermal deadline is in the past");
+        schedule(stepEvent, next);
+    }
+    for (auto dom : domains) {
+        dom->emitUpdate();
+    }
+}
+
+void
+ThermalModel::serialize(CheckpointOut &cp) const
+{
+    ClockedObject::serialize(cp);
+    fatal_if(automaticStep && !stepEvent.scheduled(),
+             "Thermal step is not scheduled");
+    Tick nextStep = automaticStep ? stepEvent.when() : 0;
+    bool periodic = automaticStep;
+    SERIALIZE_SCALAR(nextStep);
+    SERIALIZE_SCALAR(periodic);
+}
+
+void
+ThermalModel::unserialize(CheckpointIn &cp)
+{
+    ClockedObject::unserialize(cp);
+    Tick nextStep;
+    bool periodic;
+    UNSERIALIZE_SCALAR(nextStep);
+    UNSERIALIZE_SCALAR(periodic);
+    fatal_if(periodic != automaticStep, "Thermal mode changed on restore");
+    restoredStep = nextStep;
+    restored = true;
 }
 
 void
 ThermalModel::addDomain(ThermalDomain * d)
 {
+    // Configuration calls addDomain during init, after all power producers
+    // have registered in their constructors and before checkpoint restore.
+    // The periodic solver applies current power to the whole preceding step;
+    // changed latches therefore require explicit manual interval accounting.
+    // Guard before startup too, so setPower immediately after instantiate
+    // cannot change a partially completed, restored automatic interval.
+    if (automaticStep) {
+        fatal_if(!d->getSubSystem(), "Thermal domain has no subsystem");
+        for (auto *producer : d->getSubSystem()->getPowerProducers()) {
+            const auto &p =
+                static_cast<const PowerModelParams &>(producer->params());
+            for (auto *state : p.pm) {
+                if (auto *latched = dynamic_cast<LatchedPowerModel *>(state)) {
+                    latched->requireConstantPower();
+                }
+            }
+        }
+    }
     domains.push_back(d);
     entities.push_back(d);
 }

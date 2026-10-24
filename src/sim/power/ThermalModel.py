@@ -97,7 +97,10 @@ class ThermalModel(ClockedObject):
         PyBindMethod("addDomain"),
         PyBindMethod("addNode"),
         PyBindMethod("doStep"),
+        PyBindMethod("advance"),
     ]
+
+    automatic_step = Param.Bool(True, "Schedule periodic thermal updates")
 
     step = Param.Float(
         0.01, "Simulation step (in seconds) for thermal simulation"

@@ -56,6 +56,9 @@ class ThermalNode : public SimObject
   public:
     ThermalNode(const ThermalNodeParams &p);
 
+    void serialize(CheckpointOut &cp) const override;
+    void unserialize(CheckpointIn &cp) override;
+
     int id;
     bool isref;
     Temperature temp;

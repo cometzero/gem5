@@ -127,6 +127,9 @@ class PowerState : public SimObject
     /** Last tick the power stats were calculated */
     Tick prvEvalTick = 0;
 
+    /** Start of the statistics window (statistics are not checkpointed). */
+    Tick statsResetTick = 0;
+
     /**
      * The power domain that this power state leads, nullptr if it
      * doesn't lead any.
@@ -138,6 +141,7 @@ class PowerState : public SimObject
         PowerStateStats(PowerState &ps);
 
         void regStats() override;
+        void resetStats() override;
         void preDumpStats() override;
 
         PowerState &powerState;

@@ -37,6 +37,7 @@
 
 #include "sim/power_state.hh"
 
+#include <algorithm>
 #include <cassert>
 
 #include "base/logging.hh"
@@ -187,7 +188,7 @@ void
 PowerState::computeStats()
 {
     // Calculate time elapsed from last (valid) state change
-    Tick elapsed_time = curTick() - prvEvalTick;
+    Tick elapsed_time = curTick() - std::max(prvEvalTick, statsResetTick);
 
     stats.pwrStateResidencyTicks[_currState] += elapsed_time;
 
@@ -210,13 +211,19 @@ PowerState::getWeights() const
     stats.pwrStateResidencyTicks.value(residencies);
 
     // Account for current state too!
-    Tick elapsed_time = curTick() - prvEvalTick;
+    Tick elapsed_time = curTick() - std::max(prvEvalTick, statsResetTick);
     residencies[_currState] += elapsed_time;
 
-    ret.resize(enums::PwrState::Num_PwrState);
+    ret.resize(enums::PwrState::Num_PwrState, 0.0);
+    const double total = stats.pwrStateResidencyTicks.total() + elapsed_time;
+    // An instantaneous query immediately after reset has no residency yet.
+    // Use the current state instead of dividing by a zero-length interval.
+    if (total == 0) {
+        ret[_currState] = 1.0;
+        return ret;
+    }
     for (unsigned i = 0; i < enums::PwrState::Num_PwrState; i++)
-        ret[i] = residencies[i] / \
-                     (stats.pwrStateResidencyTicks.total() + elapsed_time);
+        ret[i] = residencies[i] / total;
 
     return ret;
 }
@@ -264,6 +271,17 @@ PowerState::PowerStateStats::regStats()
     }
 
     numTransitions = 0;
+}
+
+void
+PowerState::PowerStateStats::resetStats()
+{
+    statistics::Group::resetStats();
+    // A reset does not imply a preceding dump or state transition. Discard
+    // elapsed time from the previous statistics interval along with counters.
+    // Keep prvEvalTick unchanged: set() also uses it to detect repeated state
+    // changes in the same tick. A statistics reset is not a state change.
+    powerState.statsResetTick = curTick();
 }
 
 void
