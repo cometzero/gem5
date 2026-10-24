@@ -1,0 +1,8 @@
+{
+    "schema_version": 1,
+    "qualification": "UNCALIBRATED",
+    "source":
+        "No identified Zena silicon event energies or LPDDR5X electrical data; all actors intentionally unconfigured",
+    "temperature_c": 25,
+    "kinds": {}
+}

@@ -1,0 +1,185 @@
+{
+    "schema_version": 1,
+    "qualification": "SYNTHETIC",
+    "source":
+        "Fabricated positive coefficients for energy/thermal plumbing tests only. Not A720AE, CMN or LPDDR5X estimates.",
+    "temperature_c": 25,
+    "kinds": {
+        "cpu_pipeline": {
+            "event_j": {
+                "commitStats0.numOps": 1e-10
+            },
+            "leakage": {
+                "reference_w": 0.01,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES",
+            "reference_voltage_v": 1.0
+        },
+        "l1i": {
+            "reference_voltage_v": 1.0,
+            "event_j": {
+                "numDataArrayReads": 2e-12,
+                "numDataArrayWrites": 3e-12,
+                "numTagArrayReads": 1e-12,
+                "numTagArrayWrites": 1e-12,
+                "numAtomicALUOperations": 2e-12
+            },
+            "leakage": {
+                "reference_w": 0.01,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        },
+        "l1d": {
+            "reference_voltage_v": 1.0,
+            "event_j": {
+                "numDataArrayReads": 2e-12,
+                "numDataArrayWrites": 3e-12,
+                "numTagArrayReads": 1e-12,
+                "numTagArrayWrites": 1e-12,
+                "numAtomicALUOperations": 2e-12
+            },
+            "leakage": {
+                "reference_w": 0.01,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        },
+        "l2": {
+            "reference_voltage_v": 1.0,
+            "event_j": {
+                "numDataArrayReads": 2e-12,
+                "numDataArrayWrites": 3e-12,
+                "numTagArrayReads": 1e-12,
+                "numTagArrayWrites": 1e-12,
+                "numAtomicALUOperations": 2e-12
+            },
+            "leakage": {
+                "reference_w": 0.01,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        },
+        "dsu_l3": {
+            "event_j": {
+                "numDataArrayReads": 2e-12,
+                "numDataArrayWrites": 3e-12,
+                "numTagArrayReads": 1e-12,
+                "numTagArrayWrites": 1e-12,
+                "numAtomicALUOperations": 2e-12
+            },
+            "leakage": {
+                "reference_w": 0.01,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        },
+        "slc": {
+            "event_j": {
+                "numDataArrayReads": 2e-12,
+                "numDataArrayWrites": 3e-12,
+                "numTagArrayReads": 1e-12,
+                "numTagArrayWrites": 1e-12,
+                "numAtomicALUOperations": 2e-12
+            },
+            "leakage": {
+                "reference_w": 0.01,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        },
+        "router": {
+            "event_j": {
+                "buffer_reads": 1e-12,
+                "buffer_writes": 1e-12,
+                "crossbar_activity": 1e-12,
+                "sw_input_arbiter_activity": 1e-12,
+                "sw_output_arbiter_activity": 1e-12
+            },
+            "leakage": {
+                "reference_w": 0.01,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        },
+        "dmc_phy": {
+            "event_j": {
+                "readReqs": 2e-12,
+                "writeReqs": 2e-12
+            },
+            "leakage": {
+                "reference_w": 0.01,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        },
+        "dram": {
+            "event_j": {
+                "readBursts": 1e-09,
+                "writeBursts": 1e-09
+            },
+            "leakage": {
+                "reference_w": 0.01,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        },
+        "io": {
+            "event_j": {
+                "pktCount::total": 1e-12,
+                "pktSize::total": 1e-13
+            },
+            "leakage": {
+                "reference_w": 0.01,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        }
+    },
+    "actors": {
+        "links.ext_in": {
+            "event_j": {
+                "ext_in_link_utilization": 1e-12
+            },
+            "leakage": {
+                "reference_w": 0.001,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        },
+        "links.ext_out": {
+            "event_j": {
+                "ext_out_link_utilization": 1e-12
+            },
+            "leakage": {
+                "reference_w": 0.001,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        },
+        "links.int": {
+            "event_j": {
+                "int_link_utilization": 1e-12
+            },
+            "leakage": {
+                "reference_w": 0.001,
+                "alpha_per_k": 0.01,
+                "reference_c": 25
+            },
+            "state_assumption": "SYNTHETIC_CONSTANT_ALL_STATES"
+        }
+    }
+}
