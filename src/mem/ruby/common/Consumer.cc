@@ -51,10 +51,10 @@ namespace ruby
 {
 
 Consumer::Consumer(ClockedObject *_em, Event::Priority ev_prio)
-    : m_wakeup_event([this]{ processCurrentEvent(); },
-                    "Consumer Event", false, ev_prio),
+    : m_wakeup_event([this] { processCurrentEvent(); }, "Consumer Event",
+                     false, ev_prio),
       em(_em)
-{ }
+{}
 
 void
 Consumer::scheduleEvent(Cycles time_delta)
@@ -75,7 +75,11 @@ Consumer::scheduleEventAbsolute(Tick evt_time)
     // m_wakeup_ticks is a shared variable whose "home" event queue is the
     // one for the object associated with thie consumer.
     assert(em->eventQueue() == curEventQueue());
-    Tick when = divCeil(evt_time, em->clockPeriod()) * em->clockPeriod();
+    // Clock edges need not be multiples of the period after a DVFS change.
+    Tick edge = em->clockEdge();
+    Tick when = evt_time <= edge
+                    ? edge
+                    : em->clockEdge(em->ticksToCycles(evt_time - edge));
     gem5_assert(when >= em->clockEdge(),
                 "Cannot schedule wakeups in the past");
     m_wakeup_ticks.insert(when);
@@ -85,26 +89,36 @@ Consumer::scheduleEventAbsolute(Tick evt_time)
 void
 Consumer::scheduleNextWakeup()
 {
-    // look for the next tick in the future to schedule
-    auto it = m_wakeup_ticks.lower_bound(em->clockEdge());
+    // Preserve deadlines made under an earlier clock period. A deadline that
+    // now falls before the next clock edge still needs to wake its consumer.
+    auto it = m_wakeup_ticks.begin();
     if (it != m_wakeup_ticks.end()) {
-        Tick when = *it;
-        if (m_wakeup_event.scheduled() && (when < m_wakeup_event.when()))
+        Tick edge = em->clockEdge();
+        Tick when =
+            *it <= edge ? edge : em->clockEdge(em->ticksToCycles(*it - edge));
+        if (m_wakeup_event.scheduled() && (when < m_wakeup_event.when())) {
             em->reschedule(m_wakeup_event, when, true);
-        else if (!m_wakeup_event.scheduled())
+        } else if (!m_wakeup_event.scheduled()) {
             em->schedule(m_wakeup_event, when);
+        }
     }
 }
 
 void
 Consumer::processCurrentEvent()
 {
-    auto curr = m_wakeup_ticks.begin();
-    assert(em->clockEdge() == *curr);
+    // A DVFS update can move the next edge after this event was scheduled.
+    // Keep the deadline and defer the wakeup to the first valid clock edge.
+    if (em->clockEdge() != curTick()) {
+        scheduleNextWakeup();
+        return;
+    }
 
-    // remove the current tick from the wakeup list, wake up, and then schedule
-    // the next wakeup
-    m_wakeup_ticks.erase(curr);
+    // Multiple old deadlines may map to one new edge. Service them once,
+    // without dropping past deadlines or leaving a duplicate event behind.
+    auto end = m_wakeup_ticks.upper_bound(curTick());
+    assert(end != m_wakeup_ticks.begin());
+    m_wakeup_ticks.erase(m_wakeup_ticks.begin(), end);
     wakeup();
     scheduleNextWakeup();
 }
