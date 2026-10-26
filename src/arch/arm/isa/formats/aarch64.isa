@@ -632,8 +632,9 @@ namespace Aarch64
           case 0x4:
             switch (op2 & 0x1) {
               case 0x0:
-                return new WarnUnimplemented(
-                        "bti", machInst);
+                // FEAT_BTI is not implemented (ID_AA64PFR1_EL1.BT == 0).
+                // All four BTI encodings are architectural NOPs in this case.
+                return new NopInst(machInst);
             }
             break;
         }
