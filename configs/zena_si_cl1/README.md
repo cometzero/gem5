@@ -1,23 +1,39 @@
-# SI CL1 standalone simulation
+# Apollo SI CL1 integrated boot and benchmark
 
-`run.py`는 동일한 Zephyr ELF를 QEMU에서 먼저 검사하고 gem5에서 실행하는
-CL1 전용 구성이다. AP, RSE 및 CL0를 생성하지 않는다. 4개의 AArch64 PE,
-GICv3 View2 주소, PL011, 100 MHz generic timer를 연결한다.
+`configs/zena_si_cl1/run.py`는 CL1 전용 구성이다. AP/RSE/CL0/SCP CPU는
+생성하지 않는다. Apollo workspace의 `run_gem5_zephyr.sh`가 native runtime
+환경과 ELF/binary CRC를 검증하고 이 configuration을 호출한다.
 
 ```sh
-# /srv/oss_contrib에서 먼저 QEMU CL1 빌드/검증 완료
-python3 gem5/scripts/zena_si_cl1/run.py \
-  --outdir build/zena/si-cl1/gem5-minor --cpu minor
+# Apollo workspace root: 기존 통합 image를 원본 그대로 부팅
+./yocto_build.sh --keep-conf gem5-native zephyr-demos-cl1
+./run_gem5_zephyr.sh
+./run_gem5_zephyr.sh --headless --exit-after-pass --timeout 1200
+
+# 별도 benchmark image와 기존 MinorCPU 측정
+./yocto_build.sh --keep-conf --gem5-zephyr
+./run_gem5_zephyr.sh --mode benchmark --headless
 ```
 
-기본 ELF는 `build/zena/si-cl1/zephyr/bin/zephyr.elf`이다. `--outdir`는 새
-디렉터리여야 하며 실행 명령, 바이너리 SHA256, 호스트 시간, return code,
-UART 로그(`system.platform.terminal`), `stats.txt`, `config.ini`를 보존한다.
-`--cpu atomic`은 기능 디버깅 전용이며 성능 결과로 사용하지 않는다.
-`--cpu timing`은 단순 timing 대조, 기본 `minor`는 in-order timing proxy다.
+Launcher의 기본 `integrated` mode는 `zephyr-demos-cl1.elf`의 entry와
+symbols/BSS를 사용하고 CRC 후처리된 원본 `.bin`을 `0x140000000`에
+겹쳐 적재한다. Counter는 125 MHz, CPU는 AtomicSimpleCPU이다.
+`SiCl1Mhu`는 MHUv3 doorbell/ACK/mask/IRQ 및 PFDI SCMI protocol `0x90`의
+version, OoR/Online 응답을 제공한다. 실제 SCP firmware나 PFDI fault
+recovery를 실행하는 모델은 아니다. HIPC AP peer는 offline이다.
+
+`benchmark` mode는 `zephyr-si-cl1-bench.elf`, 100 MHz counter, MinorCPU,
+UART EOT 종료 및 기존 ROI replay를 유지한다. Low-level `run.py`의 mode
+기본값은 기존 caller 호환을 위해 `benchmark`이며 launcher가 명시적으로
+mode를 전달한다. 통합 image 부팅에는 standalone recipe가 필요 없다.
+
+Interactive tmux는 UART/platform log/shell pane과 F12 종료를 제공한다.
+`--cpu atomic`은 기능 디버깅용이며 성능 결과로 사용하지 않는다.
+`--cpu timing`은 단순 timing 대조, `minor`는 in-order timing proxy다.
 기본은 demand-only cache이며 R82AE의 prefetcher를 보정하지 않았다.
-실제 R82AE는 8단계 in-order superscalar이고 Minor는 다른 파이프라인이므로
-이 결과를 실물 CPU 속도나 WCET로 해석하지 않는다.
+Pipeline과 latency를 실물 CPU 성능이나 WCET로 해석하지 않는다.
+원본 image hash, native hash, 실제 명령 및 result는 output에 보존한다.
+Authoritative UART는 `system.platform.terminal`, socket 전달본은 `uart.log`다.
 
 ## 주소 및 경로
 
@@ -29,7 +45,10 @@ UART 로그(`system.platform.terminal`), `stats.txt`, `config.ini`를 보존한�
 | private ITCM | `0x100000000` / 128 KiB/PE | CPU-side router → private memory |
 | private DTCM | `0x100100000` / 128 KiB/PE | CPU-side router → private memory |
 | GICD / GICR0 | `0x30200000` / `0x30260000` | GICv3 (4 redistributors) |
-| PL011 | `0x2a410000` / SPI39 | UART, EOT 종료 |
+| PL011 | `0x2a410000` / SPI39 | UART, benchmark에서만 EOT 종료 |
+| HIPC (integrated) | PBX `0x39000000`, MBX `0x39040000` | IRQ72/73, AP offline |
+| HIPC RAM (integrated) | `0xe0130000` / 512 KiB | local shared memory |
+| PFDI (integrated) | PBX `0x39200000`, MBX `0x39240000` | IRQ82, SCMI slots `0x48000000` + 40 × CPU |
 
 TCM 128 KiB, CPU 1 GHz, L1 2-cycle tag/data, L2 8-cycle tag/data, SRAM
 20 ns와 TCM 1 ns는 실험 가정이다. MM/LLRAM fabric은 32 B/cycle,
@@ -98,7 +117,7 @@ TCM enable와 실행 권한, MAX CVAL 및 timer 재설정을 검사한다.
 exit 1이 예상 결과다. `tests/zena_si_cl1/mixed_profile.py --elf <ELF>`와
 `--vmsa-first` 변형은 혼합 profile이 초기화 중 exit 1로 거부되는지 검사한다.
 
-## ROI 통계
+## ROI 통계 (benchmark mode)
 
 첫 실행의 guest counter begin/end를 `counter_tick × 10000`으로 변환한
 schedule을 동일 설정으로 replay한다. 1 THz simulator tick, 100 MHz counter,
@@ -118,3 +137,7 @@ Counter delta와 cache traffic은 모델 근거이며 host elapsed는 실행비�
 `0094-L1-memory-system.md`, `0112-L2-memory-system.md`, `0403`–`0405`,
 `0413`–`0414`; `doc/arm_zena_css_dev_guide/09-programmers-model-for-zena-css.md`;
 QEMU `hw/arm/zena-css-si.c`; Zephyr board `firmware/zena-si/zephyr/`.
+
+Apollo root `tests/gem5_si_cl1/`의 native MMIO probe는 네 SCMI slot,
+malformed/unsupported 응답, ACK/mask/GIC pending 및 HIPC offline을 검사한다.
+CPU IRQ exception 진입, 실제 SCP firmware 및 SI checkpoint restore 검증은 별도다.

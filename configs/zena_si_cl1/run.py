@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-"""Standalone SI CL1: experimental PMSA ISA and explicit timing proxies."""
+"""SI CL1 integrated boot and benchmarks with experimental PMSA."""
 
 import argparse
 import json
@@ -53,6 +53,12 @@ def ccsidr(size, ways):
 def build(args):
     # Lower-level wiring is intentional: stdlib ArmBoard assumes VMSA/Linux
     # and cannot express private TCMs or an LLRAM path outside the L2.
+    integrated = getattr(args, "mode", "benchmark") == "integrated"
+    workload = ArmFsWorkload(object_file=str(args.elf))
+    if integrated:
+        # Preserve the binary-only post-build CRC; keep ELF entry and symbols.
+        workload.extras = [str(args.image)]
+        workload.extras_addrs = [0x140000000]
     system = ArmSystem(
         mem_mode="atomic" if args.cpu == "atomic" else "timing",
         cache_line_size=64,
@@ -61,7 +67,7 @@ def build(args):
         multi_proc=True,
         cpu_affinities=[0x10000 + (i << 8) for i in range(4)],
         release=ArmRelease(extensions=["LPAE", "VIRTUALIZATION", "FEAT_LSE"]),
-        workload=ArmFsWorkload(object_file=str(args.elf)),
+        workload=workload,
     )
     system.clk_domain = SrcClockDomain(
         clock=args.clock, voltage_domain=VoltageDomain()
@@ -87,6 +93,11 @@ def build(args):
     system.mm_sram.port = system.mm_fabric.mem_side_ports
     for memory in (system.nc_sram, system.llram):
         memory.port = system.fabric.mem_side_ports
+    if integrated:
+        hipc = AddrRange(0xE0130000, size="512KiB")
+        system.mem_ranges = [mm, nc, hipc, llram]
+        system.hipc_sram = SimpleMemory(range=hipc, latency=args.sram_latency)
+        system.hipc_sram.port = system.fabric.mem_side_ports
 
     system.platform = RealView()
     platform = system.platform
@@ -98,10 +109,11 @@ def build(args):
         maint_int=ArmPPI(num=25),
     )
     platform.gic.pio = system.fabric.mem_side_ports
-    platform.counter = SystemCounter(freqs=[100000000])
+    counter_hz = 125000000 if integrated else 100000000
+    platform.counter = SystemCounter(freqs=[counter_hz])
     platform.timer = GenericTimer(
         counter=platform.counter,
-        cntfrq=100000000,
+        cntfrq=counter_hz,
         int_el1_phys=ArmPPI(num=29),
         int_el1_virt=ArmPPI(num=27),
         int_el2_ns_phys=ArmPPI(num=26),
@@ -119,9 +131,18 @@ def build(args):
         pio_addr=0x2A410000,
         interrupt=ArmSPI(num=39),
         device=platform.terminal,
-        end_on_eot=True,
+        end_on_eot=not integrated,
     )
     platform.uart.pio = system.fabric.mem_side_ports
+    if integrated:
+        from m5.objects import SiCl1Mhu
+
+        platform.mhu = SiCl1Mhu(
+            hipc_tx_irq=ArmSPI(num=72),
+            hipc_rx_irq=ArmSPI(num=73),
+            pfdi_irq=ArmSPI(num=82),
+        )
+        platform.mhu.pio = system.fabric.mem_side_ports
 
     # MM is the only L2 allocation path. Its PoC is below L2. LLRAM,
     # peripherals and NC SRAM have a distinct, cache-free PoC fabric.
@@ -228,6 +249,10 @@ def build(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--elf", required=True, type=Path)
+    parser.add_argument("--image", type=Path)
+    parser.add_argument(
+        "--mode", choices=["integrated", "benchmark"], default="benchmark"
+    )
     parser.add_argument(
         "--cpu", choices=["atomic", "timing", "minor"], default="minor"
     )
@@ -240,8 +265,22 @@ def main():
     args = parser.parse_args()
     if args.terminal_port is not None and not 1 <= args.terminal_port <= 65535:
         parser.error("terminal-port must be 1..65535")
-    if args.max_ticks <= 0:
-        parser.error("max-ticks must be positive")
+    if args.max_ticks < 0 or (
+        args.mode == "benchmark" and args.max_ticks == 0
+    ):
+        parser.error("max-ticks must be nonnegative (positive for benchmark)")
+    if args.mode == "integrated":
+        if args.image is None or not args.image.is_file():
+            parser.error(
+                "integrated mode requires --image with "
+                "the original deployed binary"
+            )
+        if args.roi_schedule:
+            parser.error("ROI replay is only available in benchmark mode")
+    elif args.image:
+        parser.error("--image requires integrated mode")
+    if args.max_ticks == 0:
+        args.max_ticks = m5.MaxTick
     if not args.elf.is_file():
         parser.error(f"ELF does not exist: {args.elf}")
     # Validate architecture before gem5's workload loader reports a less
@@ -288,12 +327,15 @@ def main():
         "cpu": args.cpu,
         "exit_cause": event.getCause(),
         "tick": m5.curTick(),
-        "counter_hz": 100000000,
+        "counter_hz": 125000000 if args.mode == "integrated" else 100000000,
+        "mode": args.mode,
         "sim_hz": 1000000000000,
         "counter_epoch_tick": 0,
         "roi_events": events,
         "roi_complete": len(events) == 2 * len(schedule),
-        "model": "experimental PMSA64; generic pipeline; no silicon calibration",
+        "model": (
+            "experimental PMSA64; generic pipeline; no silicon calibration"
+        ),
     }
     (Path(m5.options.outdir) / "run-result.json").write_text(
         json.dumps(result, indent=2) + "\n"

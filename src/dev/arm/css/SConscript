@@ -51,6 +51,8 @@ SimObject('Scmi.py', sim_objects=[
 SimObject('Scp.py', sim_objects=['Scp'], tags=['arm isa'])
 
 Source('mhu.cc', tags=['arm isa'])
+SimObject('SiCl1Mhu.py', sim_objects=['SiCl1Mhu'], tags=['arm isa'])
+Source('si_cl1_mhu.cc', tags=['arm isa'])
 Source('scmi_platform.cc', tags=['arm isa'])
 Source('scmi_protocols.cc', tags=['arm isa'])
 
