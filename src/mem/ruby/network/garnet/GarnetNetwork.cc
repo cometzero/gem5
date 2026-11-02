@@ -44,7 +44,6 @@
 #include "mem/ruby/network/garnet/NetworkInterface.hh"
 #include "mem/ruby/network/garnet/NetworkLink.hh"
 #include "mem/ruby/network/garnet/Router.hh"
-#include "mem/ruby/system/RubySystem.hh"
 
 namespace gem5
 {
@@ -62,7 +61,7 @@ namespace garnet
  */
 
 GarnetNetwork::GarnetNetwork(const Params &p)
-    : Network(p)
+    : Network(p), m_stats_start_cycle(0)
 {
     m_num_rows = p.num_rows;
     m_ni_flit_size = p.ni_flit_size;
@@ -553,12 +552,21 @@ GarnetNetwork::regStats()
 void
 GarnetNetwork::collateStats()
 {
-    RubySystem *rs = params().ruby_system;
-    double time_delta = double(curCycle() - rs->getStartCycle());
+    // Use this network's cumulative clock cycles, including any frequency
+    // changes, rather than subtracting a cycle count from the Ruby domain.
+    const double time_delta = double(curCycle() - m_stats_start_cycle);
+
+    // Link counters already cover the whole interval since resetStats().
+    // Recompute aggregates so another dump does not count them twice.
+    m_total_ext_in_link_utilization = 0;
+    m_total_ext_out_link_utilization = 0;
+    m_total_int_link_utilization = 0;
+    m_average_link_utilization = 0;
+    m_average_vc_load.reset();
 
     for (int i = 0; i < m_networklinks.size(); i++) {
         link_type type = m_networklinks[i]->getType();
-        int activity = m_networklinks[i]->getLinkUtilization();
+        const auto activity = m_networklinks[i]->getLinkUtilization();
 
         if (type == EXT_IN_)
             m_total_ext_in_link_utilization += activity;
@@ -567,12 +575,14 @@ GarnetNetwork::collateStats()
         else if (type == INT_)
             m_total_int_link_utilization += activity;
 
-        m_average_link_utilization +=
-            (double(activity) / time_delta);
-
-        std::vector<unsigned int> vc_load = m_networklinks[i]->getVcLoad();
-        for (int j = 0; j < vc_load.size(); j++) {
-            m_average_vc_load[j] += ((double)vc_load[j] / time_delta);
+        // A dump at the reset cycle has no elapsed observation window.
+        // Keep raw counts, but report zero for normalized statistics.
+        if (time_delta > 0) {
+            m_average_link_utilization += double(activity) / time_delta;
+            const auto &vc_load = m_networklinks[i]->getVcLoad();
+            for (int j = 0; j < vc_load.size(); j++) {
+                m_average_vc_load[j] += double(vc_load[j]) / time_delta;
+            }
         }
     }
 
@@ -585,6 +595,7 @@ GarnetNetwork::collateStats()
 void
 GarnetNetwork::resetStats()
 {
+    m_stats_start_cycle = curCycle();
     for (int i = 0; i < m_routers.size(); i++) {
         m_routers[i]->resetStats();
     }

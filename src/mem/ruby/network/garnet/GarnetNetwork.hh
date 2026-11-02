@@ -169,6 +169,7 @@ class GarnetNetwork : public Network
     bool m_enable_fault_model;
 
     // Statistical variables
+    Cycles m_stats_start_cycle;
     statistics::Vector m_packets_received;
     statistics::Vector m_packets_injected;
     statistics::Vector m_packet_network_latency;
