@@ -374,6 +374,164 @@ class RuntimeConfigTest(unittest.TestCase):
             )
         )
 
+    def test_cache_data_latency_controls(self):
+        for level in ("l2", "dsu_l3", "slc"):
+            with self.subTest(level=level):
+                config = copy.deepcopy(self.original)
+                profile = copy.deepcopy(self.profile)
+                if level == "l2":
+                    nodes = [cpu["l2"] for cpu in config["system"]["cpu"]]
+                elif level == "dsu_l3":
+                    nodes = [
+                        n["dsu_l3"] for n in config["system"]["ruby"]["rnf"]
+                    ]
+                else:
+                    nodes = [
+                        n["cntrl"] for n in config["system"]["ruby"]["hnf"]
+                    ]
+                if level == "slc":
+                    profile["cmn"]["slc_data_latency_cycles"] += 2
+                    expected = profile["cmn"]["slc_data_latency_cycles"]
+                else:
+                    profile["cache"][level]["data_latency_cycles"] += 2
+                    expected = profile["cache"][level]["data_latency_cycles"]
+                for node in nodes:
+                    node["cache"]["dataAccessLatency"] = expected
+                self.assertEqual(verify(config, profile)["status"], "PASS")
+                for node in (nodes[0], nodes[-1]):
+                    node["cache"]["dataAccessLatency"] = expected - 2
+                    self.assertIn(
+                        f"{node['path']} dataAccessLatency",
+                        verify(config, profile)["failures"],
+                    )
+                    node["cache"]["dataAccessLatency"] = expected
+
+    def test_home_cache_resources_rejected(self):
+        for field in (
+            "assoc",
+            "tagAccessLatency",
+            "dataAccessLatency",
+            "tagArrayBanks",
+            "dataArrayBanks",
+            "resourceStalls",
+        ):
+            with self.subTest(field=field):
+                config = copy.deepcopy(self.original)
+                node = config["system"]["ruby"]["hnf"][-1]["cntrl"]
+                value = node["cache"][field]
+                node["cache"][field] = (
+                    not value if type(value) is bool else value + 1
+                )
+                suffix = (
+                    "resource stalls" if field == "resourceStalls" else field
+                )
+                self.assertIn(
+                    f"{node['path']} {suffix}",
+                    verify(config, self.profile)["failures"],
+                )
+
+    def test_garnet_child_timing_rejected(self):
+        if self.profile["cmn"].get("network") != "garnet":
+            self.skipTest("requires instantiated Garnet network")
+        for kind in ("int_links", "ext_links"):
+            for field in ("network_link", "credit_link"):
+                for parameter, prefix in (
+                    ("link_latency", "Garnet child latency: "),
+                    ("clk_domain", "Garnet child clock binding: "),
+                ):
+                    with self.subTest(
+                        kind=kind, field=field, parameter=parameter
+                    ):
+                        config = copy.deepcopy(self.original)
+                        link = config["system"]["ruby"]["network"][kind][0]
+                        child = (
+                            link[field + "s"][0]
+                            if kind == "ext_links"
+                            else link[field]
+                        )
+                        child[parameter] = (
+                            child[parameter] + 1
+                            if parameter == "link_latency"
+                            else "system.cpu_clk_domain"
+                        )
+                        self.assertIn(
+                            f"{prefix}{link['path']} {field}[0]",
+                            verify(config, self.profile)["failures"],
+                        )
+
+    def test_garnet_interface_clock_rejected(self):
+        if self.profile["cmn"].get("network") != "garnet":
+            self.skipTest("requires instantiated Garnet network")
+        network = self.config["system"]["ruby"]["network"]
+        interface = network["netifs"][-1]
+        interface["clk_domain"] = "system.cpu_clk_domain"
+        self.assertIn(
+            f"Garnet interface clock binding: {interface['path']}",
+            verify(self.config, self.profile)["failures"],
+        )
+
+    def test_garnet_missing_children_rejected(self):
+        if self.profile["cmn"].get("network") != "garnet":
+            self.skipTest("requires instantiated Garnet network")
+        for field in ("network_links", "credit_links", "netifs"):
+            with self.subTest(field=field):
+                config = copy.deepcopy(self.original)
+                network = config["system"]["ruby"]["network"]
+                if field == "netifs":
+                    network[field].pop()
+                    reason = "Garnet interface count"
+                else:
+                    link = network["ext_links"][0]
+                    link[field].pop()
+                    reason = f"Garnet child links: {link['path']} {field[:-1]}"
+                self.assertIn(reason, verify(config, self.profile)["failures"])
+
+    def test_garnet_nondefault_mesh_delays(self):
+        if self.profile["cmn"].get("network") != "garnet":
+            self.skipTest("requires instantiated Garnet network")
+        profile = copy.deepcopy(self.profile)
+        mesh = profile["cmn"]["mesh"]
+        mesh["router_latency_cycles"] += 1
+        mesh["router_link_latency_cycles"] += 1
+        network = self.config["system"]["ruby"]["network"]
+        paths = set()
+        for router in network["routers"]:
+            if router["router_id"] < mesh["rows"] * mesh["columns"]:
+                paths.add(router["path"])
+                router["latency"] = mesh["router_latency_cycles"]
+        changed = []
+        for link in network["int_links"]:
+            if link["src_node"] in paths and link["dst_node"] in paths:
+                changed.append(link)
+                link["latency"] = mesh["router_link_latency_cycles"]
+                for field in ("network_link", "credit_link"):
+                    link[field]["link_latency"] = mesh[
+                        "router_link_latency_cycles"
+                    ]
+        self.assertTrue(changed)
+        self.assertEqual(verify(self.config, profile)["status"], "PASS")
+        for field in ("network_link", "credit_link"):
+            child = changed[-1][field]
+            child["link_latency"] = mesh["router_link_latency_cycles"] - 1
+            self.assertIn(
+                f"Garnet child latency: {changed[-1]['path']} {field}[0]",
+                verify(self.config, profile)["failures"],
+            )
+            child["link_latency"] = mesh["router_link_latency_cycles"]
+
+    def test_private_sequencer_clock_rejected(self):
+        for index in (0, len(self.original["system"]["cpu"]) - 1):
+            for key, kind in (("inst", "instruction"), ("data", "data")):
+                with self.subTest(index=index, kind=kind):
+                    config = copy.deepcopy(self.original)
+                    config["system"]["cpu"][index][key + "_sequencer"][
+                        "clk_domain"
+                    ] = "system.ruby.clk_domain"
+                    self.assertIn(
+                        f"CPU{index} {kind} sequencer clock binding",
+                        verify(config, self.profile)["failures"],
+                    )
+
     def test_stale_verification_rejected(self):
         import tempfile
         from unittest.mock import patch

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: BSD-3-Clause
 """Resolve a selected native DRAM class independently; never instantiate/simulate."""
+
 import argparse
 import hashlib
 import importlib
@@ -65,6 +66,15 @@ def parameters(obj):
     return result
 
 
+# Capture the independent oracle before importing any backend implementation.
+dram_parameters = parameters(dram)
+controller_parameters = parameters(ctrl)
+
+# A normal import only defines the FS backend; its __m5_main__ entrypoint is not
+# executed. Include the actual interpreter's CHI/topology/YAML dependency closure
+# without constructing a board or invoking m5.instantiate()/m5.simulate().
+importlib.import_module("zena_cmn.run_fs")
+
 source_hashes = {}
 for module in tuple(sys.modules.values()):
     filename = getattr(module, "__file__", None)
@@ -79,8 +89,8 @@ args.output.write_text(
         {
             "selected_class": f"{memory['custom_module'] or 'zena_css_models'}.{name}",
             "source_hashes": source_hashes,
-            "dram": parameters(dram),
-            "controller": parameters(ctrl),
+            "dram": dram_parameters,
+            "controller": controller_parameters,
         },
         indent=2,
     )

@@ -87,6 +87,30 @@ python3 gem5/scripts/zena_cmn/run_smoke.py \
 
 각 실행 디렉터리는 명령/입력 SHA256, `config.json`, DTB, resolved profile, UART, 통계, ROI tick 경계와 결과를 보존한다. `roi_summary.json`은 application bytes와 DRAM burst bytes를 구분하며 없는/모호한 카운터는 null로 표시한다. 추가 종료 dump를 ROI와 합산하지 않는다.
 
+### Garnet clock과 통계 reset
+
+Garnet의 link/VC 통계는 network 자체의 누적 cycle과 reset 시점을 사용한다.
+RubySystem과 mesh clock이 달라도 두 domain의 cycle 값을 서로 빼지 않는다.
+Link/VC aggregate는 dump마다 원래 counter에서 재계산하므로 반복 dump가
+traffic를 중복 집계하지 않는다. Reset cycle과 같은 시점의 dump는 raw count를
+보존하고 normalized 값은 0으로 기록하며, 유효한 성능 측정 window로 사용하지 않는다.
+
+`avg_link_utilization`은 link별 활동/elapsed cycle의 **합**이다. 하나의 link나
+전체 mesh의 사용률이 아니며, 평균을 내려면 해당 directed data link 수로 나눠야
+한다. 이 평균은 hotspot을 드러내지 않는다. Router buffer counter의 repeated-dump
+집계는 이 수정에 포함되지 않았으므로 ROI 중간 dump가 있으면 별도로 검토한다.
+
+```sh
+# gem5 source root 기준; 1GHz/2GHz/4GHz마다 새 outdir 사용
+/path/to/gem5.opt --outdir=/tmp/garnet-stats-new \
+  tests/zena_cmn/directed/garnet_stats_reset.py \
+  --ruby-clock 2GHz --mesh-clock 1GHz
+```
+
+이 회귀는 nonzero warmup 뒤 reset, zero-cycle dump, 64 completed reads와
+반복 dump의 link/VC 값 및 분모를 검사한다. 고정 mesh 1/2/4 GHz native 회귀를
+확인했으며 runtime DVFS transition, Linux ROI와 physical CDC 검증은 별도다.
+
 구현 및 검증 범위는 [implementation_report.md](implementation_report.md)에 기록한다. 실패 항목의 후속 결과는 [재검증 보고서](revalidation_report.md)에 기록한다. 원본 설계 입력은 프로젝트의 `doc/gem5/`이다.
 
 짧은 정합성 smoke는 `--eviction-mib 1`을 명시한다. `--eviction-mib 64`의 큰 working set은 별도 장시간 검사이며, 1 MiB 실행으로 대용량 eviction을 검증했다고 주장하지 않는다. 원래 64 MiB 16코어 시도는 20분 host 예산 안에 ROI까지 도달하지 못했다.
@@ -113,3 +137,12 @@ boot 상태에서 재개하고 기존 guest switch/warmup/ROI marker를 그대�
 전환과 ROI 종료를 검사하는 baremetal 회귀다. 이 검사가 Linux initramfs 복원이나
 실제 제품 장치 전체의 checkpoint 지원을 입증하지는 않는다. diskless boot의
 Ruby cache는 Atomic noncaching 상태이며 timing cache snapshot은 지원 범위 밖이다.
+
+### Apollo host verification coverage (2026-10-31)
+
+`verify_config.py` additionally checks HNF SLC associativity, tag/data latency,
+array banks and resource stalls; Garnet data/credit child latency and clock
+bindings; network-interface and private-sequencer clocks. Actual native-oracle
+mutation checks and six existing Apollo config/DTB cases passed (optional
+NPU/SCMI/Simple-network tests require their respective profiles). These are
+configuration checks, not new workload timing or silicon validation.

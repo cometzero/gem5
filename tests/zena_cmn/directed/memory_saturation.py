@@ -24,7 +24,15 @@ from m5.objects import (
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "configs"))
 from zena_cmn.memory_backend import build_memory_backend
-from zena_cmn.parameters import load_parameters
+
+sys.path.insert(
+    0, str(Path(__file__).resolve().parents[3] / "scripts/zena_cmn")
+)
+from run_saturation import (
+    backend_parameters,
+    backend_source_hashes,
+    digest,
+)
 
 
 def positive(value):
@@ -46,23 +54,37 @@ parser.add_argument("--fabric-clock", default="2GHz")
 parser.add_argument("--outstanding", type=positive, default=1024)
 parser.add_argument("--warmup-us", type=positive, default=10)
 parser.add_argument("--roi-us", type=positive, default=40)
+parser.add_argument(
+    "--memory-profile",
+    type=Path,
+    help="select memory settings only; keep diagnostic routing unchanged",
+)
 args = parser.parse_args()
 if args.outstanding % 16 or args.fabric_width not in (32, 64, 128, 256, 512):
     parser.error(
         "outstanding must divide by 16; width must be 32..512 power of two"
     )
 
-profile = (
-    Path(__file__).resolve().parents[3]
-    / "configs/zena_cmn/profiles/a720ae_npu_v01_async.yaml"
-)
-params = load_parameters(profile)
-if args.path == "direct":
-    params["npu"]["enabled"] = False
-    params["scope"]["npu_present"] = False
-    params["memory"]["create_future_npu_arbiter_now"] = False
-else:
-    params["npu"]["fabric_width"] = args.fabric_width
+try:
+    params, memory_identity = backend_parameters(
+        args.memory_profile, args.path, args.fabric_width
+    )
+except (OSError, ValueError) as error:
+    parser.error(str(error))
+out = Path(m5.options.outdir)
+# gem5 opens stats.txt before executing this script. The campaign launcher
+# protects existing directories before starting gem5; do not reject its new
+# empty statistics file here.
+if any(
+    (out / name).exists()
+    for name in (
+        "config.json",
+        "config.ini",
+        "saturation-result.json",
+    )
+):
+    parser.error("output contains existing simulation artifacts")
+source_hashes = backend_source_hashes()
 
 system = System(
     mem_mode="timing", mem_ranges=[AddrRange(0x80000000, size="2GiB")]
@@ -72,6 +94,9 @@ system.clk_domain = SrcClockDomain(
     clock="2GHz", voltage_domain=system.voltage_domain
 )
 backend = build_memory_backend(system, params)
+model_name = backend["parameters"]["dram_class"].rsplit(".", 1)[0]
+model_source = Path(sys.modules[model_name].__file__).resolve()
+source_hashes[str(model_source)] = digest(model_source)
 count = 1 if args.path == "single" else 16
 system.generators = [
     PyTrafficGen(
@@ -98,7 +123,6 @@ else:
 
 root = Root(full_system=False, system=system)
 m5.instantiate()
-out = Path(m5.options.outdir)
 warmup, roi = args.warmup_us * 1_000_000, args.roi_us * 1_000_000
 start_addr, end_addr = 0x81000000, 0x85000000
 for index, gen in enumerate(system.generators):
@@ -213,6 +237,9 @@ result = {
     * 1000,
     "dram_fingerprint": backend["fingerprint"],
     "dram_parameters": backend["parameters"],
+    "memory_profile": memory_identity,
+    "effective_memory": params["memory"],
+    "source_sha256": source_hashes,
     "channels": channels,
     "source_retries": sum(
         delta(generator_prefix(i) + "numRetries") for i in range(count)
@@ -225,9 +252,16 @@ result = {
         "No CPU/CHI or SMMU in this reference",
     ],
 }
-(out / "saturation-result.json").write_text(
-    json.dumps(result, indent=2) + "\n"
-)
+if (
+    backend_parameters(args.memory_profile, args.path, args.fabric_width)[1]
+    != memory_identity
+):
+    raise RuntimeError("memory profile changed during simulation")
+for path, expected in source_hashes.items():
+    if digest(Path(path)) != expected:
+        raise RuntimeError(f"source changed during simulation: {path}")
+with (out / "saturation-result.json").open("x") as result_file:
+    result_file.write(json.dumps(result, indent=2) + "\n")
 print(
     json.dumps(
         {

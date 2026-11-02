@@ -7,7 +7,7 @@
 
 #endif
 
-static unsigned workers = 16, passes = 2;
+static unsigned workers = 16, passes = 2, warmup_passes = 1;
 static const char *mode = "read", *kernel_name = "scalar";
 static unsigned array_mib;
 static int initialize_before_switch, channel_phase_spread;
@@ -112,7 +112,13 @@ run(void *arg)
         }
     }
     /* Check the read warmup sum so the compiler must retain its loads. */
-    warmup_sums[id] = kernel(id);
+    for (unsigned p = 0; p < warmup_passes; ++p) {
+        warmup_sums[id] += kernel(id);
+        if (p + 1 < warmup_passes) {
+            complete_memory();
+            sync_workers(&barrier);
+        }
+    }
     complete_memory();
     sync_workers(&barrier);
     if (!id) {
@@ -156,12 +162,15 @@ main(int argc, char **argv)
             workers = number(argv[++i]);
         } else if (!strcmp(argv[i], "--passes") && i + 1 < argc) {
             passes = number(argv[++i]);
+        } else if (!strcmp(argv[i], "--warmup-passes") && i + 1 < argc) {
+            warmup_passes = number(argv[++i]);
         } else if (!strcmp(argv[i], "--mode") && i + 1 < argc) {
             mode = argv[++i];
         } else {
             fprintf(stderr,
                     "usage: %s [--host] [--workers 1|4|8|16 (12 with --host)] "
                     "[--passes 1|2|4|8] [--mode read|copy|stream] "
+                    "[--warmup-passes 1|2|4|8] "
                     "[--kernel scalar|neon] [--array-mib N] "
                     "[--initialize-before-switch] [--channel-phase-spread]\n",
                     argv[0]);
@@ -171,6 +180,8 @@ main(int argc, char **argv)
     if ((workers != 1 && workers != 4 && workers != 8 && workers != 16 &&
          !(host && workers == 12)) ||
         (passes != 1 && passes != 2 && passes != 4 && passes != 8) ||
+        (warmup_passes != 1 && warmup_passes != 2 && warmup_passes != 4 &&
+         warmup_passes != 8) ||
         (strcmp(mode, "read") && strcmp(mode, "copy") &&
          strcmp(mode, "stream"))) {
         return 2;
@@ -255,7 +266,7 @@ main(int argc, char **argv)
         for (unsigned i = 0; i < workers; ++i) {
             size_t count = worker_end[i] - worker_begin[i];
             ok &= sums[i] == (double)count * passes;
-            ok &= warmup_sums[i] == (double)count;
+            ok &= warmup_sums[i] == (double)count * warmup_passes;
         }
     } else {
         for (size_t j = 0; j < elements; ++j) {
@@ -264,15 +275,15 @@ main(int argc, char **argv)
     }
     printf("CMN_RESULT {\"benchmark\":\"%s\",\"result\":\"%s\","
            "\"workers\":%u,\"passes\":%u,\"working_set_bytes\":%zu,"
-           "\"useful_bytes\":%zu,\"warmup_passes\":1,"
+           "\"useful_bytes\":%zu,\"warmup_passes\":%u,"
            "\"checksum\":%.0f,\"warmup_checksum\":%.0f,\"kernel\":\"%s\","
            "\"initialization_before_"
            "switch\":%s,"
            "\"channel_phase_spread\":%s,\"allocated_bytes\":%zu,"
            "\"first_touch\":\"%s\",\"affinity\":\"%s\"}\n",
            mode, ok ? "PASS" : "FAIL", workers, passes, bytes * arrays,
-           bytes * arrays * passes, checksum, warmup_checksum, kernel_name,
-           initialize_before_switch ? "true" : "false",
+           bytes * arrays * passes, warmup_passes, checksum, warmup_checksum,
+           kernel_name, initialize_before_switch ? "true" : "false",
            channel_phase_spread ? "true" : "false", allocated_bytes * arrays,
            initialize_before_switch ? "main-before-switch" : "pinned-worker",
            host ? "first-available-workers" : "0..workers-1");

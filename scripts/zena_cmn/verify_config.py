@@ -25,7 +25,7 @@ def digest(path):
     return checksum.hexdigest()
 
 
-def expected_memory(profile_json, executable):
+def expected_memory(profile_json, executable, env=None):
     """Independent native defaults, not the run's recorded parameter manifest."""
     with tempfile.TemporaryDirectory(prefix="zena-memory-oracle-") as tmp:
         directory = Path(tmp)
@@ -41,6 +41,7 @@ def expected_memory(profile_json, executable):
             timeout=60,
             capture_output=True,
             text=True,
+            env=env,
         )
         if execution.returncode:
             raise ValueError(
@@ -230,6 +231,42 @@ def verify_noc(network, controllers, profile):
                     link["latency"] == latency,
                     f"Garnet link latency: {link['path']}",
                 )
+                for field, child_type in (
+                    ("network_link", "NetworkLink"),
+                    ("credit_link", "CreditLink"),
+                ):
+                    children = (
+                        link.get(field + "s", [])
+                        if kind == "ext_links"
+                        else [link.get(field, {})]
+                    )
+                    check(
+                        len(children) == (2 if kind == "ext_links" else 1)
+                        and all(c.get("type") == child_type for c in children),
+                        f"Garnet child links: {link['path']} {field}",
+                    )
+                    for i, child in enumerate(children):
+                        label = f"{link['path']} {field}[{i}]"
+                        check(
+                            child.get("link_latency") == latency,
+                            f"Garnet child latency: {label}",
+                        )
+                        check(
+                            child.get("clk_domain")
+                            == "system.ruby.network.clk_domain",
+                            f"Garnet child clock binding: {label}",
+                        )
+    if not simple:
+        check(
+            len(network.get("netifs", [])) == len(network["ext_links"]),
+            "Garnet interface count",
+        )
+        for interface in network.get("netifs", []):
+            check(
+                interface.get("clk_domain")
+                == "system.ruby.network.clk_domain",
+                f"Garnet interface clock binding: {interface['path']}",
+            )
     for controller in controllers:
         path = controller["path"]
         private = re.fullmatch(r"system\.cpu(\d+)\.(l1i|l1d|l2)", path)
@@ -527,6 +564,11 @@ def verify(config, profile):
                 == profile["ruby"][kind + "_sequencer_outstanding"],
                 f"CPU{i} {kind} sequencer outstanding",
             )
+            check(
+                cpu[key + "_sequencer"].get("clk_domain")
+                == cpu_domains.get(cpu.get("cpu_id")),
+                f"CPU{i} {kind} sequencer clock binding",
+            )
 
         check(
             cpu["icache_port"]["peer"].startswith(
@@ -574,6 +616,22 @@ def verify(config, profile):
             )
             * 1024,
             "Home SLC size",
+        )
+        for field, key in (
+            ("assoc", "slc_assoc"),
+            ("tagAccessLatency", "slc_tag_latency_cycles"),
+            ("dataAccessLatency", "slc_data_latency_cycles"),
+            ("tagArrayBanks", "slc_tag_banks"),
+            ("dataArrayBanks", "slc_data_banks"),
+        ):
+            check(
+                hn["cache"].get(field) == profile["cmn"][key],
+                f"{hn['path']} {field}",
+            )
+        check(
+            hn["cache"].get("resourceStalls")
+            == profile["cache"]["resource_stalls"],
+            f"{hn['path']} resource stalls",
         )
 
     for node, mc in zip(snfs, mcs):
